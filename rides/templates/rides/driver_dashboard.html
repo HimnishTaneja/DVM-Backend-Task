@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+{% block title %}Driver Dashboard — CarpoolNet{% endblock %}
+
+{% block extra_head %}
+<style>
+  @keyframes ping {
+    0%   { transform: scale(1);   opacity: .8; }
+    70%  { transform: scale(1.6); opacity: 0;  }
+    100% { transform: scale(1);   opacity: 0;  }
+  }
+  .ping-dot::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: #ef4444;
+    animation: ping 1.4s cubic-bezier(0,0,.2,1) infinite;
+  }
+  .ping-dot {
+    position: relative;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #ef4444;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .request-card {
+    border: 1.5px solid #f0f0f0;
+    border-radius: 16px;
+    padding: 1.25rem 1.5rem;
+    background: #fff;
+    transition: box-shadow .15s, border-color .15s, transform .15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .request-card:hover {
+    box-shadow: 0 8px 30px rgba(0,102,245,.1);
+    border-color: #0066f5;
+    transform: translateY(-1px);
+  }
+  .request-card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 4px;
+    background: linear-gradient(180deg, #0066f5, #0043b0);
+    border-radius: 4px 0 0 4px;
+  }
+  .fare-badge {
+    background: linear-gradient(135deg, #ecfdf5, #d1fae5);
+    color: #065f46;
+    border: 1.5px solid #6ee7b7;
+    border-radius: 12px;
+    padding: .5rem 1rem;
+    font-weight: 800;
+    font-size: 1.15rem;
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    white-space: nowrap;
+  }
+  .accept-btn {
+    background: linear-gradient(135deg, #0066f5, #0043b0);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: .6rem 1.25rem;
+    font-weight: 700;
+    font-size: .875rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    transition: filter .15s, transform .1s;
+    white-space: nowrap;
+  }
+  .accept-btn:hover  { filter: brightness(1.1); transform: scale(1.02); }
+  .accept-btn:active { transform: scale(.98); }
+  .route-arrow {
+    color: #9ca3af;
+    font-size: 1.1rem;
+    margin: 0 .4rem;
+  }
+  .node-chip {
+    display: inline-flex; align-items: center; gap: .3rem;
+    background: #f1f5f9; color: #334155;
+    border-radius: 8px; padding: .2rem .6rem;
+    font-size: .82rem; font-weight: 600;
+  }
+  .meta-tag {
+    display: inline-flex; align-items: center; gap: .25rem;
+    font-size: .75rem; color: #6b7280;
+    background: #f9fafb; border: 1px solid #f0f0f0;
+    border-radius: 6px; padding: .15rem .5rem;
+  }
+  #refresh-bar {
+    height: 3px;
+    background: linear-gradient(90deg, #0066f5, #a5b4fc);
+    border-radius: 2px;
+    transition: width 1s linear;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.75rem;">
+  <div>
+    <h1 style="font-size:1.5rem;font-weight:800;color:#111827;">Driver Dashboard</h1>
+    <p style="margin-top:.25rem;font-size:.875rem;color:#9ca3af;">
+      Welcome back, <strong style="color:#374151;">{{ request.user.username }}</strong>
+      &nbsp;·&nbsp; <span style="color:#059669;font-weight:600;">🟢 Online</span>
+    </p>
+  </div>
+  <a href="{% url 'rides:publish_trip' %}" class="btn btn-primary">
+    <svg style="width:15px;height:15px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>
+    </svg>
+    Publish New Trip
+  </a>
+</div>
+
+<!-- Stats -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:2rem;">
+  <div class="card p-4">
+    <p class="stat-label">Active Trips</p>
+    <p class="stat-value" style="color:#0066f5;">{{ active_trips|length }}</p>
+  </div>
+  <div class="card p-4" style="position:relative;">
+    <p class="stat-label">Waiting Requests</p>
+    <p class="stat-value" style="color:#ef4444;">{{ incoming|length }}</p>
+    {% if incoming %}
+    <span class="ping-dot" style="position:absolute;top:1rem;right:1rem;"></span>
+    {% endif %}
+  </div>
+  <div class="card p-4">
+    <p class="stat-label">Completed</p>
+    <p class="stat-value" style="color:#059669;">{{ past_trips|length }}</p>
+  </div>
+  <div class="card p-4">
+    <p class="stat-label">Wallet Balance</p>
+    <p class="stat-value">${{ wallet.balance|default:"0.00" }}</p>
+  </div>
+</div>
+
+<!-- ── INCOMING REQUESTS (Uber-style) ── -->
+<div style="margin-bottom:2rem;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem;">
+    <div style="display:flex;align-items:center;gap:.75rem;">
+      <h2 class="section-title">
+        Ride Requests
+        {% if incoming %}
+        <span style="display:inline-flex;align-items:center;justify-content:center;
+                     background:#ef4444;color:white;border-radius:999px;
+                     font-size:.7rem;font-weight:800;padding:0 .5rem;height:20px;
+                     min-width:20px;margin-left:.4rem;">{{ incoming|length }}</span>
+        {% endif %}
+      </h2>
+      {% if incoming %}
+      <span class="ping-dot"></span>
+      {% endif %}
+    </div>
+    <div style="display:flex;align-items:center;gap:.5rem;">
+      <div style="width:120px;background:#f3f4f6;border-radius:4px;overflow:hidden;height:3px;">
+        <div id="refresh-bar" style="width:100%;background:linear-gradient(90deg,#0066f5,#a5b4fc);height:3px;border-radius:2px;"></div>
+      </div>
+      <span style="font-size:.7rem;color:#9ca3af;">auto-refresh</span>
+    </div>
+  </div>
+
+  {% if not active_trips %}
+  <!-- No trips published yet -->
+  <div class="card p-8" style="text-align:center;border:2px dashed #e5e7eb;">
+    <div style="font-size:2.5rem;margin-bottom:.75rem;">🛣️</div>
+    <p style="font-weight:600;color:#374151;">Publish a trip to start seeing ride requests</p>
+    <p style="font-size:.85rem;color:#9ca3af;margin-top:.35rem;">
+      Passengers along your route will appear here as soon as you go online.
+    </p>
+    <a href="{% url 'rides:publish_trip' %}" class="btn btn-primary" style="margin-top:1.25rem;">
+      + Publish Trip
+    </a>
+  </div>
+
+  {% elif incoming %}
+  <!-- Request cards -->
+  <div style="display:flex;flex-direction:column;gap:.9rem;">
+    {% for item in incoming %}
+    <div class="request-card">
+      <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:1rem;justify-content:space-between;">
+
+        <!-- Left: passenger + route -->
+        <div style="flex:1;min-width:240px;">
+          <!-- Passenger -->
+          <div style="display:flex;align-items:center;gap:.65rem;margin-bottom:.75rem;">
+            <div style="width:36px;height:36px;border-radius:50%;
+                        background:linear-gradient(135deg,#0066f5,#0043b0);
+                        color:white;font-weight:800;font-size:.95rem;
+                        display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              {{ item.request.passenger.username|slice:":1"|upper }}
+            </div>
+            <div>
+              <p style="font-weight:700;color:#111827;font-size:.95rem;">
+                {{ item.request.passenger.get_full_name|default:item.request.passenger.username }}
+              </p>
+              <p style="font-size:.72rem;color:#9ca3af;">Passenger · Request #{{ item.request.id }}</p>
+            </div>
+          </div>
+
+          <!-- Route -->
+          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:.35rem;margin-bottom:.75rem;">
+            <span class="node-chip">
+              <svg style="width:12px;height:12px;color:#0066f5;" fill="currentColor" viewBox="0 0 20 20">
+                <circle cx="10" cy="10" r="4"/>
+              </svg>
+              {{ item.request.pickup_node.name }}
+            </span>
+            <span class="route-arrow">→</span>
+            <span class="node-chip" style="background:#fef3c7;color:#92400e;">
+              <svg style="width:12px;height:12px;" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 2a6 6 0 100 12A6 6 0 0010 2zm0 10a4 4 0 110-8 4 4 0 010 8z"/>
+              </svg>
+              {{ item.request.destination_node.name }}
+            </span>
+          </div>
+
+          <!-- Meta tags -->
+          <div style="display:flex;flex-wrap:wrap;gap:.4rem;">
+            <span class="meta-tag">
+              🚗 Trip #{{ item.trip.id }}
+              ({{ item.trip.start_node.name }} → {{ item.trip.end_node.name }})
+            </span>
+            {% if item.detour_nodes == 0 %}
+            <span class="meta-tag" style="color:#059669;background:#ecfdf5;border-color:#a7f3d0;">
+              ✓ No detour
+            </span>
+            {% else %}
+            <span class="meta-tag" style="color:#d97706;background:#fffbeb;border-color:#fde68a;">
+              +{{ item.detour_nodes }} detour hop{{ item.detour_nodes|pluralize }}
+            </span>
+            {% endif %}
+            <span class="meta-tag">
+              💺 {{ item.seats_left }} seat{{ item.seats_left|pluralize }} left
+            </span>
+          </div>
+        </div>
+
+        <!-- Right: fare + accept -->
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.75rem;flex-shrink:0;">
+          <div class="fare-badge">
+            💰 ${{ item.fare }}
+          </div>
+          <form method="post" action="{% url 'rides:accept_request' item.trip.id item.request.id %}">
+            {% csrf_token %}
+            <button type="submit" class="accept-btn">
+              <svg style="width:15px;height:15px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+              </svg>
+              Accept Ride
+            </button>
+          </form>
+        </div>
+
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% else %}
+  <!-- Trips exist but no matching requests -->
+  <div class="card p-8" style="text-align:center;">
+    <div style="font-size:2.5rem;margin-bottom:.75rem;">🔍</div>
+    <p style="font-weight:600;color:#374151;">No matching requests right now</p>
+    <p style="font-size:.85rem;color:#9ca3af;margin-top:.35rem;max-width:340px;margin-left:auto;margin-right:auto;">
+      Passengers within 2 hops of your route will show up here automatically.
+      Page auto-refreshes every 20 seconds.
+    </p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── Active Trips ── -->
+<div style="margin-bottom:2rem;">
+  <h2 class="section-title" style="margin-bottom:1rem;">My Active Trips</h2>
+  {% if active_trips %}
+  <div style="display:flex;flex-direction:column;gap:.75rem;">
+    {% for trip in active_trips %}
+    <div class="card p-5">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;">
+        <div style="display:flex;align-items:center;gap:1rem;">
+          <div style="width:40px;height:40px;background:#eff6ff;border-radius:50%;
+                      display:flex;align-items:center;justify-content:center;
+                      font-weight:700;font-size:.8rem;color:#0052d9;flex-shrink:0;">
+            #{{ trip.id }}
+          </div>
+          <div>
+            <p style="font-weight:700;color:#111827;">
+              {{ trip.start_node.name }}
+              <span style="color:#d1d5db;margin:0 .4rem;">→</span>
+              {{ trip.end_node.name }}
+            </p>
+            <p style="font-size:.75rem;color:#9ca3af;margin-top:.1rem;">
+              Max {{ trip.max_passengers }} passengers ·
+              {% with c=trip.accepted_passengers.count %}{{ c }} confirmed{% endwith %}
+              {% if trip.current_node %} · At <strong>{{ trip.current_node.name }}</strong>{% endif %}
+            </p>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+          <span class="badge badge-green">Active</span>
+          <a href="{% url 'rides:trip_detail' trip.id %}" class="btn btn-secondary btn-sm">Details</a>
+          <a href="{% url 'rides:driver_requests' trip.id %}" class="btn btn-primary btn-sm">All Requests</a>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card p-8" style="text-align:center;border:2px dashed #e5e7eb;">
+    <span style="font-size:2.5rem;">🛣️</span>
+    <p style="margin-top:.75rem;color:#6b7280;">No active trips. Ready to earn?</p>
+    <a href="{% url 'rides:publish_trip' %}" class="btn btn-primary" style="margin-top:1rem;">Publish a Trip</a>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Past trips -->
+{% if past_trips %}
+<div>
+  <h2 class="section-title" style="margin-bottom:1rem;">Recent History</h2>
+  <div class="card" style="overflow:hidden;">
+    <table class="tbl">
+      <thead>
+        <tr><th>Trip</th><th>Route</th><th>Status</th><th>Date</th></tr>
+      </thead>
+      <tbody>
+        {% for trip in past_trips %}
+        <tr>
+          <td style="font-weight:600;">#{{ trip.id }}</td>
+          <td>{{ trip.start_node.name }} → {{ trip.end_node.name }}</td>
+          <td>
+            <span class="badge {% if trip.status == 'completed' %}badge-green{% else %}badge-red{% endif %}">
+              {{ trip.get_status_display }}
+            </span>
+          </td>
+          <td>{{ trip.created_at|date:"M d, Y" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/* Auto-refresh every 20s — live request feed */
+let countdown = 20;
+const bar = document.getElementById('refresh-bar');
+
+function tick() {
+  countdown--;
+  if (bar) bar.style.width = (countdown / 20 * 100) + '%';
+  if (countdown <= 0) {
+    window.location.reload();
+  } else {
+    setTimeout(tick, 1000);
+  }
+}
+setTimeout(tick, 1000);
+</script>
+{% endblock %}

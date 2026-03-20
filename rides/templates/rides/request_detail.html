@@ -1,0 +1,324 @@
+{% extends "base.html" %}
+{% block title %}Request #{{ request.id }} — CarpoolNet{% endblock %}
+
+{% block extra_head %}
+<style>
+  @keyframes ping-green {
+    0%   { transform:scale(1);   opacity:.8; }
+    70%  { transform:scale(1.7); opacity:0;  }
+    100% { transform:scale(1);   opacity:0;  }
+  }
+  .tracking-dot::before {
+    content:'';
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    background:#0066f5;
+    animation:ping-green 1.4s cubic-bezier(0,0,.2,1) infinite;
+  }
+  .tracking-dot {
+    position:relative;
+    width:10px;height:10px;
+    border-radius:50%;
+    background:#0066f5;
+    display:inline-block;
+    flex-shrink:0;
+  }
+  .route-node {
+    display:flex;
+    align-items:center;
+    gap:.6rem;
+    padding:.4rem .6rem;
+    border-radius:8px;
+    transition:background .3s;
+    font-size:.8rem;
+    font-weight:500;
+    color:#6b7280;
+  }
+  .route-node.passed  { color:#9ca3af; text-decoration:line-through; }
+  .route-node.current { background:#eff6ff; color:#1d4ed8; font-weight:700; }
+  .route-node .dot {
+    width:10px;height:10px;border-radius:50%;background:#d1d5db;flex-shrink:0;
+  }
+  .route-node.passed .dot  { background:#10b981; }
+  .route-node.current .dot { background:#0066f5; }
+  #track-progress-fill { transition:width .8s ease; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="margin-bottom:1.5rem;">
+  <a href="{% url 'rides:passenger_dashboard' %}" style="display:inline-flex;align-items:center;gap:.375rem;font-size:.875rem;color:#0066f5;text-decoration:none;">
+    <svg style="width:16px;height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <div style="margin-top:.75rem;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem;">
+    <div>
+      <h1 style="font-size:1.5rem;font-weight:800;color:#111827;">Request #{{ request.id }}</h1>
+      <p style="font-size:.875rem;color:#9ca3af;margin-top:.25rem;">
+        {{ request.pickup_node.name }}
+        <span style="margin:0 .5rem;color:#d1d5db;">→</span>
+        {{ request.destination_node.name }}
+      </p>
+    </div>
+    <div style="display:flex;align-items:center;gap:.5rem;">
+      <span class="badge {% if request.status == 'confirmed' %}badge-green{% elif request.status == 'pending' %}badge-amber{% elif request.status == 'completed' %}badge-blue{% else %}badge-red{% endif %}" style="font-size:.8rem;padding:.3rem .75rem;">
+        {{ request.get_status_display }}
+      </span>
+      {% if request.status == 'pending' %}
+      <form method="post" action="{% url 'rides:cancel_request' request.id %}" style="display:inline;"
+            onsubmit="return confirm('Cancel this request?')">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger btn-sm">Cancel Request</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if request.status == 'confirmed' and request.confirmed_trip %}
+<!-- ── LIVE TRACKING PANEL ── -->
+<div class="card" style="margin-bottom:1.5rem;border:2px solid #bfdbfe;overflow:hidden;">
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#eff6ff,#dbeafe);padding:1rem 1.5rem;border-bottom:1px solid #bfdbfe;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;">
+      <div style="display:flex;align-items:center;gap:.75rem;">
+        <div style="width:40px;height:40px;background:linear-gradient(135deg,#0066f5,#0043b0);border-radius:50%;
+                    display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:1rem;">
+          {{ request.confirmed_trip.driver.username|slice:":1"|upper }}
+        </div>
+        <div>
+          <p style="font-weight:800;color:#1e3a8a;">{{ request.confirmed_trip.driver.username }}</p>
+          <p style="font-size:.75rem;color:#3b82f6;">Trip #{{ request.confirmed_trip.id }} · {{ request.confirmed_trip.start_node.name }} → {{ request.confirmed_trip.end_node.name }}</p>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.4rem;background:white;border:1.5px solid #93c5fd;border-radius:20px;padding:.3rem .75rem;">
+        <span class="tracking-dot"></span>
+        <span style="font-size:.7rem;font-weight:800;color:#1d4ed8;text-transform:uppercase;letter-spacing:.05em;">Live tracking</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Progress bar -->
+  <div style="padding:1rem 1.5rem 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;">
+      <span style="font-size:.72rem;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.04em;">Trip Progress</span>
+      <span id="track-pct" style="font-size:.72rem;font-weight:700;color:#0066f5;">—</span>
+    </div>
+    <div style="height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin-bottom:.4rem;">
+      <div id="track-progress-fill" style="height:100%;border-radius:3px;background:linear-gradient(90deg,#0066f5,#06b6d4);width:0%;"></div>
+    </div>
+    <p id="track-status" style="font-size:.72rem;color:#9ca3af;">Loading…</p>
+  </div>
+
+  <!-- Route timeline -->
+  <div style="padding:1rem 1.5rem;">
+    <p style="font-size:.72rem;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem;">Driver Route</p>
+    <div id="track-route" style="display:flex;flex-direction:column;gap:.1rem;">
+      <p style="font-size:.8rem;color:#9ca3af;">Loading route…</p>
+    </div>
+  </div>
+
+  <!-- Your stop indicator -->
+  <div style="padding:0 1.5rem 1rem;">
+    <div id="your-stop-info" style="display:none;background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px;padding:.75rem 1rem;">
+      <p style="font-size:.8rem;font-weight:700;color:#166534;">📍 Your pickup: <span id="your-pickup-node"></span></p>
+      <p style="font-size:.75rem;color:#15803d;margin-top:.25rem;">🏁 Your destination: <span id="your-dest-node">{{ request.destination_node.name }}</span></p>
+    </div>
+  </div>
+
+  <!-- Trip completed -->
+  <div id="trip-completed-banner" style="display:none;padding:1rem 1.5rem;background:#f0fdf4;border-top:1px solid #bbf7d0;">
+    <div style="display:flex;align-items:center;gap:.75rem;">
+      <span style="font-size:1.5rem;">✅</span>
+      <div>
+        <p style="font-weight:700;color:#166534;">Trip Completed!</p>
+        <p style="font-size:.8rem;color:#15803d;">Fare has been deducted from your wallet. Thank you for riding!</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if request.status == 'confirmed' and not request.confirmed_trip %}
+<div class="card p-5" style="margin-bottom:1.5rem;border-left:4px solid #10b981;background:#f0fdf4;">
+  <div style="display:flex;align-items:center;gap:.75rem;">
+    <span style="font-size:1.5rem;">✅</span>
+    <div>
+      <p style="font-weight:700;color:#166534;">Ride confirmed</p>
+      <p style="font-size:.875rem;color:#15803d;margin-top:.125rem;">Your driver will pick you up soon.</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if request.status == 'completed' %}
+<div class="card p-5" style="margin-bottom:1.5rem;border-left:4px solid #0066f5;background:#eff6ff;">
+  <div style="display:flex;align-items:center;gap:.75rem;">
+    <span style="font-size:1.5rem;">🏁</span>
+    <div>
+      <p style="font-weight:700;color:#1e40af;">Trip Completed</p>
+      <p style="font-size:.875rem;color:#3b82f6;margin-top:.125rem;">Fare has been deducted from your wallet.</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if request.status == 'pending' %}
+{% if not offers %}
+<div class="card p-12" style="text-align:center;margin-bottom:1.5rem;">
+  <div style="width:64px;height:64px;border-radius:50%;background:#eff6ff;display:flex;align-items:center;justify-content:center;margin:0 auto;">
+    <svg style="width:32px;height:32px;color:#0066f5;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+  </div>
+  <p style="margin-top:1rem;font-weight:600;color:#374151;">Waiting for drivers…</p>
+  <p style="margin-top:.375rem;font-size:.875rem;color:#9ca3af;">Drivers passing within 2 hops of your route will see your request and can pick you up.</p>
+</div>
+{% endif %}
+
+{% if offers %}
+<div style="margin-bottom:1.5rem;">
+  <h2 class="section-title" style="margin-bottom:.375rem;">Available Offers</h2>
+  <p style="font-size:.875rem;color:#9ca3af;margin-bottom:1rem;">{{ offers.count }} driver{{ offers.count|pluralize }} offered to take you.</p>
+  <div style="display:flex;flex-direction:column;gap:1rem;">
+    {% for offer in offers %}
+    <div class="card p-5" style="border:2px solid {% if forloop.first %}#10b981{% else %}#f3f4f6{% endif %};">
+      {% if forloop.first %}
+      <div style="display:flex;align-items:center;gap:.375rem;margin-bottom:.75rem;">
+        <span style="color:#f59e0b;">★</span>
+        <span style="font-size:.72rem;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:.06em;">Best offer</span>
+      </div>
+      {% endif %}
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;">
+        <div style="display:flex;align-items:center;gap:1rem;">
+          <div style="width:44px;height:44px;background:#dbeafe;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#1e40af;font-weight:700;flex-shrink:0;">
+            {{ offer.trip.driver.username|slice:":1"|upper }}
+          </div>
+          <div>
+            <p style="font-weight:600;color:#111827;">{{ offer.trip.driver.username }}</p>
+            <p style="font-size:.875rem;color:#6b7280;">Trip #{{ offer.trip.id }} · {{ offer.trip.start_node.name }} → {{ offer.trip.end_node.name }}</p>
+            <p style="font-size:.72rem;color:#9ca3af;margin-top:.125rem;">Offered {{ offer.created_at|date:"M d, H:i" }}</p>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;">
+          <div style="text-align:center;">
+            <p style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;">Detour</p>
+            <p style="font-size:1.25rem;font-weight:800;{% if offer.detour_nodes == 0 %}color:#059669;{% elif offer.detour_nodes <= 2 %}color:#d97706;{% else %}color:#dc2626;{% endif %}">
+              +{{ offer.detour_nodes }}
+            </p>
+            <p style="font-size:.72rem;color:#9ca3af;">hop{{ offer.detour_nodes|pluralize }}</p>
+          </div>
+          <div style="text-align:center;">
+            <p style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;">Your fare</p>
+            <p style="font-size:1.25rem;font-weight:800;color:#059669;">${{ offer.fare }}</p>
+          </div>
+          <form method="post" action="{% url 'rides:confirm_offer' request.id %}">
+            {% csrf_token %}
+            <input type="hidden" name="offer_id" value="{{ offer.id }}" />
+            <button type="submit" class="btn btn-success"
+                    onclick="return confirm('Confirm this ride for ${{ offer.fare }}?')">
+              Confirm
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- Request details -->
+<div class="card p-5" style="background:#fafafa;">
+  <h3 style="font-size:.875rem;font-weight:700;color:#374151;margin-bottom:.75rem;">Request Details</h3>
+  <dl style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem 1rem;font-size:.875rem;">
+    <dt style="color:#9ca3af;">Pickup</dt>
+    <dd style="font-weight:600;color:#111827;">{{ request.pickup_node.name }}</dd>
+    <dt style="color:#9ca3af;">Destination</dt>
+    <dd style="font-weight:600;color:#111827;">{{ request.destination_node.name }}</dd>
+    <dt style="color:#9ca3af;">Submitted</dt>
+    <dd style="font-weight:600;color:#111827;">{{ request.created_at|date:"M d, Y H:i" }}</dd>
+    <dt style="color:#9ca3af;">Status</dt>
+    <dd style="font-weight:600;color:#111827;">{{ request.get_status_display }}</dd>
+  </dl>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% if request.status == 'confirmed' and request.confirmed_trip %}
+<script>
+const TRIP_ID    = {{ request.confirmed_trip.id }};
+const MY_PICKUP  = '{{ request.pickup_node.name }}';
+const MY_DEST    = '{{ request.destination_node.name }}';
+
+/* Show "your stop" info */
+document.getElementById('your-stop-info').style.display = 'block';
+document.getElementById('your-pickup-node').textContent = MY_PICKUP;
+document.getElementById('your-dest-node').textContent   = MY_DEST;
+
+async function pollTrip() {
+  try {
+    const res  = await fetch(`/api/trip/${TRIP_ID}/status/`);
+    const data = await res.json();
+    if (!res.ok) return;
+
+    /* progress bar */
+    const fill = document.getElementById('track-progress-fill');
+    const pct  = document.getElementById('track-pct');
+    const stat = document.getElementById('track-status');
+    if (fill) fill.style.width = (data.progress_pct || 0) + '%';
+    if (pct)  pct.textContent  = `${data.progress_pct || 0}%`;
+    if (stat) {
+      if (data.status === 'completed') {
+        stat.textContent = 'Trip completed';
+      } else if (data.current_node) {
+        stat.textContent = `Driver is at: ${data.current_node.name}`;
+      } else {
+        stat.textContent = 'Trip not started yet';
+      }
+    }
+
+    /* route timeline */
+    const routeEl = document.getElementById('track-route');
+    if (routeEl && data.route && data.route.length) {
+      routeEl.innerHTML = data.route.map(node => {
+        const isMe    = node.name === MY_PICKUP || node.name === MY_DEST;
+        const cls     = node.passed ? 'passed' : (
+          data.current_node && node.id === data.current_node.id ? 'current' : ''
+        );
+        const tag = node.name === MY_PICKUP
+          ? ' <span style="font-size:.65rem;background:#dbeafe;color:#1d4ed8;border-radius:4px;padding:.1rem .35rem;font-weight:700;">Your pickup</span>'
+          : node.name === MY_DEST
+          ? ' <span style="font-size:.65rem;background:#d1fae5;color:#065f46;border-radius:4px;padding:.1rem .35rem;font-weight:700;">Your drop</span>'
+          : '';
+        const carIcon = (data.current_node && node.id === data.current_node.id)
+          ? ' 🚗'
+          : (node.passed ? ' ✓' : '');
+        return `<div class="route-node ${cls}" style="${isMe ? 'font-weight:700;' : ''}">
+          <span class="dot"></span>
+          ${node.name}${carIcon}${tag}
+        </div>`;
+      }).join('');
+    }
+
+    /* completed */
+    if (data.status === 'completed') {
+      const banner = document.getElementById('trip-completed-banner');
+      if (banner) banner.style.display = 'block';
+      return; /* stop polling */
+    }
+
+    setTimeout(pollTrip, 5000);
+  } catch(e) {
+    setTimeout(pollTrip, 8000);
+  }
+}
+
+pollTrip();
+</script>
+{% endif %}
+{% endblock %}

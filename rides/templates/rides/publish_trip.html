@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Publish Trip — CarpoolNet{% endblock %}
+
+{% block content %}
+<div style="max-width:520px;margin:0 auto;">
+  <div style="margin-bottom:1.5rem;">
+    <a href="{% url 'rides:driver_dashboard' %}" style="display:inline-flex;align-items:center;gap:.375rem;font-size:.875rem;color:#0066f5;text-decoration:none;">
+      <svg style="width:16px;height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+      Back to Dashboard
+    </a>
+    <h1 style="margin-top:.75rem;font-size:1.5rem;font-weight:800;color:#111827;">Publish a New Trip</h1>
+    <p style="margin-top:.25rem;font-size:.875rem;color:#9ca3af;">Select your start and end nodes. A route will be calculated automatically.</p>
+  </div>
+
+  <div class="card p-6">
+    <form method="post" class="space-y-6">
+      {% csrf_token %}
+
+      <div>
+        <label for="start_node" class="form-label">Start Node</label>
+        <select name="start_node" id="start_node" class="form-input" required>
+          <option value="">— Select starting point —</option>
+          {% for node in nodes %}
+          <option value="{{ node.id }}">{{ node.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label for="end_node" class="form-label">End Node</label>
+        <select name="end_node" id="end_node" class="form-input" required>
+          <option value="">— Select destination —</option>
+          {% for node in nodes %}
+          <option value="{{ node.id }}">{{ node.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label for="max_passengers" class="form-label">
+          Max Passengers — <span id="pax_val" style="color:#0066f5;font-weight:700;">3</span>
+        </label>
+        <input type="range" name="max_passengers" id="max_passengers"
+               min="1" max="8" value="3" style="width:100%;margin-top:.375rem;"
+               oninput="document.getElementById('pax_val').textContent = this.value" />
+        <p style="margin-top:.375rem;font-size:.75rem;color:#9ca3af;">How many passengers can join your trip?</p>
+      </div>
+
+      <div style="background:#eff6ff;border-radius:12px;padding:1rem;border:1px solid #bfdbfe;">
+        <p style="font-size:.875rem;font-weight:600;color:#1e40af;margin-bottom:.5rem;">ℹ️ How it works</p>
+        <ul style="list-style:disc;padding-left:1.25rem;font-size:.8rem;color:#3b82f6;display:flex;flex-direction:column;gap:.25rem;">
+          <li>A BFS shortest path is computed between your nodes.</li>
+          <li>Passengers within 2 hops of your route can request to join.</li>
+          <li>You can accept or decline each request individually.</li>
+        </ul>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">
+        🗺️ Find Route &amp; Publish
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

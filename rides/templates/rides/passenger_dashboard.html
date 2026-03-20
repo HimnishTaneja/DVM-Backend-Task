@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Passenger Dashboard — CarpoolNet{% endblock %}
+
+{% block content %}
+<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:2rem;">
+  <div>
+    <h1 style="font-size:1.5rem;font-weight:800;color:#111827;">Passenger Dashboard</h1>
+    <p style="margin-top:.25rem;font-size:.875rem;color:#9ca3af;">Welcome back, <strong style="color:#374151;">{{ request.user.username }}</strong></p>
+  </div>
+  <a href="{% url 'rides:submit_request' %}" class="btn btn-primary">
+    <svg style="width:16px;height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    Request a Ride
+  </a>
+</div>
+
+<!-- Stats -->
+<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1rem;margin-bottom:2rem;">
+  <div class="card p-5">
+    <p class="stat-label">Pending</p>
+    <p class="stat-value" style="color:#d97706;">{{ active_requests|length }}</p>
+  </div>
+  <div class="card p-5">
+    <p class="stat-label">Completed</p>
+    <p class="stat-value" style="color:#059669;">{{ past_requests.count }}</p>
+  </div>
+  <div class="card p-5" style="grid-column:span 2;">
+    <p class="stat-label">Wallet Balance</p>
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:.25rem;">
+      <p class="stat-value">${{ wallet.balance|default:"0.00" }}</p>
+      <a href="{% url 'billing:wallet' %}" class="btn btn-secondary btn-sm">Top Up</a>
+    </div>
+  </div>
+</div>
+
+<!-- Active requests -->
+<div style="margin-bottom:2rem;">
+  <h2 class="section-title" style="margin-bottom:1rem;">Active Requests</h2>
+  {% if active_requests %}
+  <div style="display:flex;flex-direction:column;gap:.75rem;">
+    {% for req in active_requests %}
+    <div class="card p-5">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;">
+        <div style="display:flex;align-items:center;gap:1rem;">
+          <div style="width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700;flex-shrink:0;
+            {% if req.status == 'confirmed' %}background:#dcfce7;color:#166534;{% else %}background:#fef3c7;color:#92400e;{% endif %}">
+            #{{ req.id }}
+          </div>
+          <div>
+            <p style="font-weight:600;color:#111827;">
+              {{ req.pickup_node.name }}
+              <span style="color:#d1d5db;margin:0 .5rem;">→</span>
+              {{ req.destination_node.name }}
+            </p>
+            <p style="font-size:.75rem;color:#9ca3af;margin-top:.125rem;">
+              {{ req.offers.count }} offer{{ req.offers.count|pluralize }}
+              {% if req.confirmed_trip %} · Driver: <strong>{{ req.confirmed_trip.driver.username }}</strong>{% endif %}
+            </p>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+          <span class="badge {% if req.status == 'confirmed' %}badge-green{% else %}badge-amber{% endif %}">
+            {{ req.get_status_display }}
+          </span>
+          {% if req.status == 'pending' %}
+          <a href="{% url 'rides:request_detail' req.id %}" class="btn btn-primary btn-sm">
+            {% if req.offers.count %}View {{ req.offers.count }} Offer{{ req.offers.count|pluralize }}{% else %}Waiting…{% endif %}
+          </a>
+          <form method="post" action="{% url 'rides:cancel_request' req.id %}" style="display:inline;"
+                onsubmit="return confirm('Cancel this request?')">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
+          </form>
+          {% elif req.status == 'confirmed' %}
+          <a href="{% url 'rides:request_detail' req.id %}" class="btn btn-secondary btn-sm">Details</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card p-10" style="text-align:center;">
+    <span style="font-size:2.5rem;">🗺️</span>
+    <p style="margin-top:.75rem;color:#6b7280;">No active requests. Need a ride?</p>
+    <a href="{% url 'rides:submit_request' %}" class="btn btn-primary" style="margin-top:1rem;">Request a Ride</a>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Past requests -->
+{% if past_requests %}
+<div>
+  <h2 class="section-title" style="margin-bottom:1rem;">Past Rides</h2>
+  <div class="card" style="overflow:hidden;">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Route</th>
+          <th>Status</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for req in past_requests %}
+        <tr>
+          <td style="font-weight:600;">#{{ req.id }}</td>
+          <td>{{ req.pickup_node.name }} → {{ req.destination_node.name }}</td>
+          <td>
+            <span class="badge {% if req.status == 'completed' %}badge-green{% else %}badge-red{% endif %}">
+              {{ req.get_status_display }}
+            </span>
+          </td>
+          <td>{{ req.created_at|date:"M d, Y" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

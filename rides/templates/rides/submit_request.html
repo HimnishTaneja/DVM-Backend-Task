@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Request a Ride — CarpoolNet{% endblock %}
+
+{% block content %}
+<div style="max-width:520px;margin:0 auto;">
+  <div style="margin-bottom:1.5rem;">
+    <a href="{% url 'rides:passenger_dashboard' %}" style="display:inline-flex;align-items:center;gap:.375rem;font-size:.875rem;color:#0066f5;text-decoration:none;">
+      <svg style="width:16px;height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+      Back to Dashboard
+    </a>
+    <h1 style="margin-top:.75rem;font-size:1.5rem;font-weight:800;color:#111827;">Request a Carpool</h1>
+    <p style="margin-top:.25rem;font-size:.875rem;color:#9ca3af;">Tell us where you are and where you're going.</p>
+  </div>
+
+  <div class="card p-6">
+    <form method="post" class="space-y-6">
+      {% csrf_token %}
+
+      <div>
+        <label for="pickup_node" class="form-label">📍 Your Pickup Node</label>
+        <select name="pickup_node" id="pickup_node" class="form-input" required>
+          <option value="">— Where are you? —</option>
+          {% for node in nodes %}
+          <option value="{{ node.id }}">{{ node.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label for="destination_node" class="form-label">🏁 Your Destination Node</label>
+        <select name="destination_node" id="destination_node" class="form-input" required>
+          <option value="">— Where are you going? —</option>
+          {% for node in nodes %}
+          <option value="{{ node.id }}">{{ node.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div style="background:#fffbeb;border-radius:12px;padding:1rem;border:1px solid #fde68a;">
+        <p style="font-size:.875rem;font-weight:600;color:#92400e;margin-bottom:.5rem;">💡 How matching works</p>
+        <ul style="list-style:disc;padding-left:1.25rem;font-size:.8rem;color:#b45309;display:flex;flex-direction:column;gap:.25rem;">
+          <li>Drivers whose route passes within <strong>2 hops</strong> of your pickup and destination will see your request.</li>
+          <li>Each driver shows their detour cost and your fare before you commit.</li>
+          <li>You can cancel anytime before confirming a driver.</li>
+        </ul>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">
+        🚗 Submit Request
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

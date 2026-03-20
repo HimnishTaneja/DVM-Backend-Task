@@ -1,0 +1,642 @@
+{% extends "base.html" %}
+{% block title %}Road Network — CarpoolNet{% endblock %}
+
+{% block extra_head %}
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  #graph-container {
+    position: relative;
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 30px 70px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.07);
+  }
+  #graph-container svg { display: block; }
+
+  #map-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: rgba(8,8,28,0.92);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 14px 18px;
+    color: white;
+    font-family: 'Inter', sans-serif;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6), inset 0 0 0 0.5px rgba(255,255,255,0.04);
+    transition: opacity 0.18s ease;
+    z-index: 200;
+    min-width: 170px;
+  }
+
+  @keyframes bits-pulse {
+    0%   { r: 34px; opacity: 0.7; }
+    60%  { r: 52px; opacity: 0;   }
+    100% { r: 34px; opacity: 0;   }
+  }
+  @keyframes bits-pulse2 {
+    0%   { r: 42px; opacity: 0.4; }
+    70%  { r: 62px; opacity: 0;   }
+    100% { r: 42px; opacity: 0;   }
+  }
+  @keyframes halo {
+    0%,100% { opacity: 0.25; }
+    50%     { opacity: 0.55; }
+  }
+
+  .bits-ring1 { animation: bits-pulse  2.2s ease-out infinite; }
+  .bits-ring2 { animation: bits-pulse2 2.2s ease-out 1.1s infinite; }
+  .glow-halo  { animation: halo 3s ease-in-out infinite; }
+
+  .legend-pill {
+    display: inline-flex; align-items: center; gap: .4rem;
+    font-size: .72rem; font-weight: 600; padding: .28rem .7rem;
+    border-radius: 999px; letter-spacing: .02em;
+  }
+
+  @keyframes trip-edge-anim {
+    0%,100% { opacity:.75; }
+    50%      { opacity:1;   }
+  }
+  @keyframes driver-ring {
+    0%   { r:22px; opacity:.9; }
+    70%  { r:40px; opacity:0;  }
+    100% { r:22px; opacity:0;  }
+  }
+  @keyframes driver-ring2 {
+    0%   { r:30px; opacity:.55; }
+    75%  { r:52px; opacity:0;   }
+    100% { r:30px; opacity:0;   }
+  }
+  .trip-edge-glow { animation: trip-edge-anim 2s ease-in-out infinite; }
+  .driver-ring1   { animation: driver-ring  1.6s ease-out infinite; }
+  .driver-ring2   { animation: driver-ring2 1.6s ease-out .8s infinite; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:1.25rem;">
+  <div>
+    <h1 style="font-size:1.5rem;font-weight:800;color:#111827;">🗺️ Road Network</h1>
+    <p style="margin-top:.2rem;font-size:.85rem;color:#9ca3af;">
+      Shekhawati, Rajasthan &nbsp;·&nbsp; <strong style="color:#374151;">{{ nodes.count }}</strong> nodes &nbsp;·&nbsp;
+      <strong style="color:#374151;">{{ edges.count }}</strong> edges &nbsp;·&nbsp; directed graph
+    </p>
+  </div>
+  <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+    <span class="legend-pill" style="background:#fffbeb;color:#92400e;border:1px solid #fde68a;">🎓 Campus</span>
+    <span class="legend-pill" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;">🏙️ City</span>
+    <span class="legend-pill" style="background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;">🏘️ Town</span>
+    <span class="legend-pill" style="background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;">🛣️ Junction</span>
+    <span style="width:1px;height:16px;background:#e5e7eb;margin:0 .2rem;"></span>
+    <span id="active-trips-badge" class="legend-pill" style="background:#f9fafb;color:#6b7280;border:1px solid #e5e7eb;">🚗 Loading…</span>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:1.5rem;align-items:start;">
+
+  <!-- Interactive Map -->
+  <div>
+    <div id="graph-container" style="width:100%;height:540px;"></div>
+    <p style="margin-top:.5rem;font-size:.7rem;color:#9ca3af;text-align:center;">
+      Scroll to zoom &nbsp;·&nbsp; Drag to pan &nbsp;·&nbsp; Drag nodes to rearrange &nbsp;·&nbsp; Hover for info
+    </p>
+  </div>
+
+  <!-- Sidebar -->
+  <div style="display:flex;flex-direction:column;gap:1.25rem;">
+
+    <div class="card p-5">
+      <h2 class="section-title" style="margin-bottom:1rem;">Add Node</h2>
+      <form method="post" action="{% url 'network:add_node' %}" class="space-y-3">
+        {% csrf_token %}
+        <div>
+          <label class="form-label">Name</label>
+          <input type="text" name="name" class="form-input" placeholder="e.g. Pilani Junction" required />
+        </div>
+        <div>
+          <label class="form-label">Description <span style="color:#9ca3af;font-weight:400;">(optional)</span></label>
+          <input type="text" name="description" class="form-input" placeholder="Brief description" />
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm" style="width:100%;">+ Add Node</button>
+      </form>
+    </div>
+
+    <div class="card p-5">
+      <h2 class="section-title" style="margin-bottom:1rem;">Add Edge</h2>
+      <form method="post" action="{% url 'network:add_edge' %}" class="space-y-3">
+        {% csrf_token %}
+        <div>
+          <label class="form-label">From</label>
+          <select name="from_node" class="form-input" required>
+            <option value="">— Select —</option>
+            {% for node in nodes %}<option value="{{ node.id }}">{{ node.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="form-label">To</label>
+          <select name="to_node" class="form-input" required>
+            <option value="">— Select —</option>
+            {% for node in nodes %}<option value="{{ node.id }}">{{ node.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm" style="width:100%;">+ Add Edge</button>
+      </form>
+    </div>
+
+    <!-- Stats -->
+    <div class="card p-4" style="background:linear-gradient(135deg,#0f0c29,#1e1b4b);border:none;">
+      <p style="font-size:.7rem;font-weight:700;letter-spacing:.1em;color:rgba(255,255,255,.35);margin-bottom:.75rem;">NETWORK STATS</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.75rem;">
+        <div style="text-align:center;padding:.6rem;background:rgba(255,255,255,.05);border-radius:10px;">
+          <div style="font-size:1.4rem;font-weight:800;color:#fbbf24;">{{ nodes.count }}</div>
+          <div style="font-size:.68rem;color:rgba(255,255,255,.4);margin-top:2px;">Nodes</div>
+        </div>
+        <div style="text-align:center;padding:.6rem;background:rgba(255,255,255,.05);border-radius:10px;">
+          <div style="font-size:1.4rem;font-weight:800;color:#38bdf8;">{{ edges.count }}</div>
+          <div style="font-size:.68rem;color:rgba(255,255,255,.4);margin-top:2px;">Edges</div>
+        </div>
+      </div>
+      <!-- Live active trips -->
+      <div id="live-trips-sidebar" style="border-top:1px solid rgba(255,255,255,.08);padding-top:.75rem;">
+        <p style="font-size:.68rem;font-weight:700;letter-spacing:.08em;color:rgba(255,255,255,.3);margin-bottom:.5rem;">LIVE TRIPS</p>
+        <div id="live-trips-list" style="display:flex;flex-direction:column;gap:.4rem;">
+          <p style="font-size:.75rem;color:rgba(255,255,255,.3);">Loading…</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Nodes table -->
+<div style="margin-top:1.5rem;" class="card" style="overflow:hidden;">
+  <div style="padding:1rem 1.25rem;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;justify-content:space-between;">
+    <h2 class="section-title">All Nodes</h2>
+    <span class="badge badge-blue">{{ nodes.count }}</span>
+  </div>
+  {% if nodes %}
+  <table class="tbl">
+    <thead><tr><th>ID</th><th>Name</th><th>Description</th><th>Edges Out</th><th></th></tr></thead>
+    <tbody>
+      {% for node in nodes %}
+      <tr>
+        <td style="color:#9ca3af;">#{{ node.id }}</td>
+        <td style="font-weight:600;">{{ node.name }}</td>
+        <td style="color:#6b7280;">{{ node.description|default:"—" }}</td>
+        <td>{{ node.outgoing_edges.count }}</td>
+        <td style="text-align:right;">
+          <form method="post" action="{% url 'network:delete_node' node.id %}" style="display:inline;"
+                onsubmit="return confirm('Delete node {{ node.name }}? All its edges will be removed too.')">
+            {% csrf_token %}
+            <button type="submit" style="font-size:.75rem;color:#ef4444;font-weight:600;background:none;border:none;cursor:pointer;padding:.25rem .5rem;border-radius:6px;"
+                    onmouseover="this.style.background='#fef2f2'" onmouseout="this.style.background='none'">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="padding:2rem;text-align:center;color:#9ca3af;">No nodes yet. Add one above.</div>
+  {% endif %}
+</div>
+
+<!-- Edges table -->
+<div style="margin-top:1rem;" class="card" style="overflow:hidden;">
+  <div style="padding:1rem 1.25rem;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;justify-content:space-between;">
+    <h2 class="section-title">All Edges</h2>
+    <span class="badge badge-gray">{{ edges.count }}</span>
+  </div>
+  {% if edges %}
+  <table class="tbl">
+    <thead><tr><th>From</th><th>To</th><th></th></tr></thead>
+    <tbody>
+      {% for edge in edges %}
+      <tr>
+        <td style="font-weight:600;">{{ edge.from_node.name }}</td>
+        <td style="color:#6b7280;">→ {{ edge.to_node.name }}</td>
+        <td style="text-align:right;">
+          <form method="post" action="{% url 'network:delete_edge' edge.id %}" style="display:inline;"
+                onsubmit="return confirm('Delete this edge?')">
+            {% csrf_token %}
+            <button type="submit" style="font-size:.75rem;color:#ef4444;font-weight:600;background:none;border:none;cursor:pointer;padding:.25rem .5rem;border-radius:6px;"
+                    onmouseover="this.style.background='#fef2f2'" onmouseout="this.style.background='none'">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="padding:2rem;text-align:center;color:#9ca3af;">No edges yet. Add one above.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const graphNodes = {{ nodes_json|safe }};
+const graphEdges = {{ edges_json|safe }};
+
+/* ── Geographic anchors (lat/lon → SVG canvas, Shekhawati bounding box) ── */
+const GEO = {
+  'BITS Pilani':   { x: 498, y: 112, type: 'campus',   emoji: '🎓', desc: 'Deemed University · Est. 1964' },
+  'Pilani Town':   { x: 522, y: 150, type: 'town',     emoji: '🏘️', desc: 'Adjacent market town · 1 km' },
+  'Chirawa':       { x: 548, y: 182, type: 'town',     emoji: '🏘️', desc: 'Industrial town · NH-52' },
+  'Jhunjhunu':     { x: 396, y: 220, type: 'city',     emoji: '🏙️', desc: 'District capital · Shekhawati' },
+  'Surajgarh':     { x: 600, y: 147, type: 'town',     emoji: '🏘️', desc: 'Textile & trading town' },
+  'Loharu':        { x: 644, y:  87, type: 'junction', emoji: '🛣️', desc: 'Haryana border crossing' },
+  'Mandawa':       { x: 266, y: 254, type: 'town',     emoji: '🏘️', desc: 'Heritage havelis · Tourism hub' },
+  'Nawalgarh':     { x: 330, y: 328, type: 'town',     emoji: '🏘️', desc: 'Fresco murals · Shekhawati art' },
+  'Bissau':        { x: 206, y: 170, type: 'town',     emoji: '🏘️', desc: 'Border town · Churu district' },
+  'Churu':         { x: 160, y: 150, type: 'city',     emoji: '🏙️', desc: 'Desert city · Gateway to Thar' },
+  'Fatehpur':      { x: 150, y: 274, type: 'town',     emoji: '🏘️', desc: 'Shekhawati heritage hub' },
+  'Sikar':         { x: 260, y: 424, type: 'city',     emoji: '🏙️', desc: 'Major city · Educational hub' },
+  'Neem Ka Thana': { x: 626, y: 374, type: 'town',     emoji: '🏘️', desc: 'Eastern Shekhawati gateway' },
+};
+
+const C = {
+  campus:   { fill: '#f59e0b', stroke: '#fde68a', glow: 'rgba(245,158,11,.55)',  bright: '#f59e0b' },
+  city:     { fill: '#0ea5e9', stroke: '#7dd3fc', glow: 'rgba(14,165,233,.5)',   bright: '#38bdf8' },
+  town:     { fill: '#8b5cf6', stroke: '#c4b5fd', glow: 'rgba(139,92,246,.5)',  bright: '#a78bfa' },
+  junction: { fill: '#10b981', stroke: '#6ee7b7', glow: 'rgba(16,185,129,.5)',  bright: '#34d399' },
+  default:  { fill: '#6366f1', stroke: '#a5b4fc', glow: 'rgba(99,102,241,.5)',  bright: '#818cf8' },
+};
+
+/* init nodes */
+graphNodes.forEach(n => {
+  const g = GEO[n.name];
+  if (g) { n.fx = g.x; n.fy = g.y; n.type = g.type; n.emoji = g.emoji; n.desc = g.desc; }
+  else   { n.type = 'default'; n.emoji = '📍'; n.desc = ''; }
+});
+
+/* degree map */
+const deg = {};
+graphEdges.forEach(e => {
+  const s = e.source?.id ?? e.source, t = e.target?.id ?? e.target;
+  deg[s] = (deg[s]||0) + 1;
+  deg[t] = (deg[t]||0) + 1;
+});
+
+const nr = n => Math.max(18, Math.min(30, 14 + (deg[n.id]||0) * 1.8));
+
+/* ── SVG setup ── */
+const container = document.getElementById('graph-container');
+const W = container.clientWidth || 760, H = 540;
+const svg = d3.select('#graph-container').append('svg').attr('width','100%').attr('height', H);
+const defs = svg.append('defs');
+
+/* background radial gradient */
+const bg = defs.append('radialGradient').attr('id','bg').attr('cx','45%').attr('cy','25%').attr('r','80%');
+bg.append('stop').attr('offset','0%').attr('stop-color','#1a1048');
+bg.append('stop').attr('offset','55%').attr('stop-color','#0c0c26');
+bg.append('stop').attr('offset','100%').attr('stop-color','#050510');
+
+/* glow filter */
+const flt = defs.append('filter').attr('id','glow').attr('x','-60%').attr('y','-60%').attr('width','220%').attr('height','220%');
+flt.append('feGaussianBlur').attr('in','SourceGraphic').attr('stdDeviation','5').attr('result','blur');
+const fm = flt.append('feMerge');
+fm.append('feMergeNode').attr('in','blur');
+fm.append('feMergeNode').attr('in','SourceGraphic');
+
+/* softer glow for labels */
+const fltS = defs.append('filter').attr('id','glow-soft').attr('x','-40%').attr('y','-40%').attr('width','180%').attr('height','180%');
+fltS.append('feGaussianBlur').attr('in','SourceGraphic').attr('stdDeviation','2.5').attr('result','b');
+const fmS = fltS.append('feMerge');
+fmS.append('feMergeNode').attr('in','b');
+fmS.append('feMergeNode').attr('in','SourceGraphic');
+
+/* arrowhead */
+const mk = defs.append('marker').attr('id','arrow')
+  .attr('viewBox','0 -4 10 8').attr('refX',36).attr('refY',0)
+  .attr('markerWidth',5).attr('markerHeight',5).attr('orient','auto');
+mk.append('path').attr('d','M0,-4L10,0L0,4').attr('fill','rgba(255,255,255,.22)');
+
+/* ── Render background ── */
+svg.append('rect').attr('width','100%').attr('height',H).attr('fill','url(#bg)');
+
+/* subtle dot-grid */
+const pat = defs.append('pattern').attr('id','dots').attr('width',40).attr('height',40).attr('patternUnits','userSpaceOnUse');
+pat.append('circle').attr('cx',20).attr('cy',20).attr('r',1).attr('fill','rgba(255,255,255,0.04)');
+svg.append('rect').attr('width','100%').attr('height',H).attr('fill','url(#dots)');
+
+/* map border glow ring */
+svg.append('rect').attr('width','100%').attr('height',H).attr('rx',20)
+  .attr('fill','none').attr('stroke','rgba(139,92,246,.18)').attr('stroke-width',1.5);
+
+/* region label */
+const rLabel = svg.append('g').attr('transform','translate(18,22)');
+rLabel.append('text').attr('fill','rgba(255,255,255,.14)').attr('font-size','10px')
+  .attr('font-weight','800').attr('letter-spacing','.14em').attr('font-family','Inter,sans-serif')
+  .text('SHEKHAWATI  ·  RAJASTHAN');
+rLabel.append('text').attr('y',16).attr('fill','rgba(255,255,255,.07)').attr('font-size','8px')
+  .attr('letter-spacing','.1em').attr('font-family','Inter,sans-serif')
+  .text('ROAD NETWORK  ·  INTERACTIVE MAP');
+
+/* ── Main group (zoom target) ── */
+const gMain = svg.append('g');
+svg.call(d3.zoom().scaleExtent([0.3, 5]).on('zoom', e => gMain.attr('transform', e.transform)));
+
+/* ── Force sim ── */
+const sim = d3.forceSimulation(graphNodes)
+  .force('link', d3.forceLink(graphEdges).id(d => d.id).distance(75))
+  .force('charge', d3.forceManyBody().strength(-160))
+  .force('center', d3.forceCenter(W / 2, H / 2))
+  .force('collision', d3.forceCollide(40));
+
+/* ── Edges ── */
+const linkLines = gMain.append('g').selectAll('line').data(graphEdges).enter().append('line')
+  .attr('stroke','rgba(255,255,255,.1)')
+  .attr('stroke-width', 2)
+  .attr('stroke-dasharray','5 3')
+  .attr('marker-end','url(#arrow)');
+
+/* colored glow overlay on edges */
+const linkGlows = gMain.append('g').selectAll('line').data(graphEdges).enter().append('line')
+  .attr('stroke', d => {
+    const src = graphNodes.find(n => n.id === (d.source?.id ?? d.source));
+    return C[src?.type || 'default']?.bright || '#818cf8';
+  })
+  .attr('stroke-width', 1.2)
+  .attr('opacity', .22)
+  .attr('filter','url(#glow)');
+
+/* ── Particles ── */
+const pData = [];
+graphEdges.forEach(e => [0, 0.36, 0.72].forEach(off => pData.push({ e, off })));
+const parts = gMain.append('g').selectAll('circle').data(pData).enter().append('circle')
+  .attr('r', 2.5)
+  .attr('fill', d => {
+    const src = graphNodes.find(n => n.id === (d.e.source?.id ?? d.e.source));
+    return C[src?.type || 'default']?.stroke || '#a5b4fc';
+  })
+  .attr('opacity', 0);
+
+/* ── Active trip overlay groups (inserted below nodes so nodes sit on top) ── */
+const tripEdgeGroup = gMain.append('g').attr('id','trip-edges');
+const tripCarGroup  = gMain.append('g').attr('id','trip-cars');
+
+/* ── Nodes ── */
+const nodeG = gMain.append('g').selectAll('g').data(graphNodes).enter().append('g')
+  .style('cursor', 'grab')
+  .call(d3.drag()
+    .on('start', (e, d) => { if (!e.active) sim.alphaTarget(.3).restart(); d.fx = d.x; d.fy = d.y; })
+    .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
+    .on('end',   (e, d) => { if (!e.active) sim.alphaTarget(0); })
+  );
+
+/* BITS Pilani special double-pulse rings */
+nodeG.filter(d => d.name === 'BITS Pilani').append('circle')
+  .attr('r', 34).attr('class','bits-ring1')
+  .attr('fill','none').attr('stroke','#f59e0b').attr('stroke-width',1.5).attr('opacity',.7);
+nodeG.filter(d => d.name === 'BITS Pilani').append('circle')
+  .attr('r', 42).attr('class','bits-ring2')
+  .attr('fill','none').attr('stroke','#fbbf24').attr('stroke-width',.8).attr('opacity',.4);
+
+/* glow halo */
+nodeG.append('circle')
+  .attr('r', d => nr(d) + 11)
+  .attr('fill', d => C[d.type]?.glow || C.default.glow)
+  .attr('class','glow-halo');
+
+/* main circle */
+const circles = nodeG.append('circle')
+  .attr('r', d => nr(d))
+  .attr('fill', d => C[d.type]?.fill || C.default.fill)
+  .attr('stroke', d => C[d.type]?.stroke || C.default.stroke)
+  .attr('stroke-width', 2.5)
+  .attr('filter','url(#glow)');
+
+/* tooltip */
+const tooltip = d3.select('#graph-container').append('div')
+  .attr('id','map-tooltip').style('opacity', 0);
+
+circles
+  .on('mouseover', function(e, d) {
+    d3.select(this.parentNode).select('.glow-halo')
+      .transition().duration(150).attr('r', nr(d) + 22).attr('opacity', .75);
+    tooltip.style('opacity', 1).html(`
+      <div style="font-size:26px;line-height:1;margin-bottom:7px;">${d.emoji}</div>
+      <div style="font-weight:800;font-size:15px;color:#fff;letter-spacing:-.01em;">${d.name}</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.42);margin-top:3px;line-height:1.4;">${d.desc || ''}</div>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:10px;font-size:11.5px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:${C[d.type]?.bright || '#818cf8'};display:inline-block;box-shadow:0 0 6px ${C[d.type]?.bright || '#818cf8'}"></span>
+        <span style="color:rgba(255,255,255,.65);text-transform:capitalize;">${d.type || 'node'}</span>
+        <span style="color:rgba(255,255,255,.3);">·</span>
+        <span style="color:rgba(255,255,255,.65);">${deg[d.id]||0} route${(deg[d.id]||0)!==1?'s':''}</span>
+      </div>
+    `);
+  })
+  .on('mousemove', function(e) {
+    const rect = container.getBoundingClientRect();
+    let tx = e.clientX - rect.left + 14, ty = e.clientY - rect.top - 16;
+    if (tx + 210 > W) tx -= 224;
+    if (ty < 0) ty = 8;
+    tooltip.style('left', tx + 'px').style('top', ty + 'px');
+  })
+  .on('mouseout', function(e, d) {
+    d3.select(this.parentNode).select('.glow-halo')
+      .transition().duration(200).attr('r', nr(d) + 11).attr('opacity', .35);
+    tooltip.style('opacity', 0);
+  });
+
+/* emoji inside node */
+nodeG.append('text')
+  .attr('text-anchor','middle').attr('dominant-baseline','central')
+  .attr('font-size', d => Math.round(nr(d) * .85) + 'px')
+  .attr('pointer-events','none')
+  .text(d => d.emoji || '📍');
+
+/* label below */
+nodeG.append('text')
+  .attr('text-anchor','middle')
+  .attr('font-size','10px').attr('font-weight','700')
+  .attr('fill','rgba(255,255,255,.82)')
+  .attr('font-family','Inter,sans-serif')
+  .attr('letter-spacing','-.01em')
+  .attr('dy', d => nr(d) + 14 + 'px')
+  .attr('pointer-events','none')
+  .attr('filter','url(#glow-soft)')
+  .text(d => d.name);
+
+/* ── Compass rose ── */
+const cx = W > 500 ? W - 58 : 740, cy = H - 58;
+const comp = svg.append('g').attr('transform', `translate(${cx},${cy})`);
+comp.append('circle').attr('r',22).attr('fill','rgba(0,0,0,.45)').attr('stroke','rgba(255,255,255,.1)').attr('stroke-width',1);
+[['N',0,'#f87171'],['E',90,'rgba(255,255,255,.35)'],['S',180,'rgba(255,255,255,.35)'],['W',270,'rgba(255,255,255,.35)']].forEach(([dir,ang,col]) => {
+  const rad = ang * Math.PI / 180, dist = 14;
+  comp.append('text')
+    .attr('x', Math.sin(rad)*dist).attr('y', -Math.cos(rad)*dist + 4)
+    .attr('text-anchor','middle').attr('font-size','9px').attr('font-weight','800')
+    .attr('fill', col).attr('font-family','Inter,sans-serif').text(dir);
+});
+/* needle */
+comp.append('polygon').attr('points','0,-14 3,0 0,4 -3,0').attr('fill','#f87171').attr('opacity',.9);
+comp.append('polygon').attr('points','0,14 3,0 0,-2 -3,0').attr('fill','rgba(255,255,255,.25)');
+
+/* ── Tick ── */
+sim.on('tick', () => {
+  linkLines.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+  linkGlows.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+  nodeG.attr('transform', d => `translate(${d.x},${d.y})`);
+});
+
+/* ── Particle animation ── */
+(function animParts() {
+  const t = Date.now() * 0.00038;
+  parts.each(function(d) {
+    const s = d.e.source, tg = d.e.target;
+    if (!s?.x || !tg?.x) return;
+    const pct = (t + d.off) % 1;
+    const fadeIn  = Math.min(1, pct / 0.07);
+    const fadeOut = Math.min(1, (1 - pct) / 0.07);
+    d3.select(this)
+      .attr('cx', s.x + (tg.x - s.x) * pct)
+      .attr('cy', s.y + (tg.y - s.y) * pct)
+      .attr('opacity', Math.min(fadeIn, fadeOut) * 0.88);
+  });
+  requestAnimationFrame(animParts);
+})();
+
+/* ── Active trip overlays ── */
+const nodeById = {};
+graphNodes.forEach(n => { nodeById[n.id] = n; });
+
+function buildEdgeKey(a, b) { return `${a}-${b}`; }
+const edgeSet = new Set();
+graphEdges.forEach(e => {
+  const s = e.source?.id ?? e.source, t = e.target?.id ?? e.target;
+  edgeSet.add(buildEdgeKey(s, t));
+});
+
+const TRIP_COLORS = ['#f97316','#e11d48','#7c3aed','#0ea5e9','#10b981','#eab308'];
+
+async function loadActiveTrips() {
+  try {
+    const res  = await fetch('/api/trips/active/');
+    if (!res.ok) return;
+    const trips = await res.json();
+
+    /* clear previous overlays */
+    tripEdgeGroup.selectAll('*').remove();
+    tripCarGroup.selectAll('*').remove();
+
+    /* update active trips counter badge */
+    const badge = document.getElementById('active-trips-badge');
+    if (badge) {
+      badge.textContent = trips.length ? `🚗 ${trips.length} active trip${trips.length > 1 ? 's' : ''}` : '🚗 No active trips';
+      badge.style.background = trips.length ? '#fef3c7' : '#f9fafb';
+      badge.style.color      = trips.length ? '#92400e' : '#6b7280';
+      badge.style.borderColor= trips.length ? '#fde68a' : '#e5e7eb';
+    }
+
+    /* update sidebar live trips list */
+    const listEl = document.getElementById('live-trips-list');
+    if (listEl) {
+      if (!trips.length) {
+        listEl.innerHTML = '<p style="font-size:.75rem;color:rgba(255,255,255,.25);">No active trips</p>';
+      } else {
+        listEl.innerHTML = trips.map((trip, ti) => {
+          const col = TRIP_COLORS[ti % TRIP_COLORS.length];
+          return `<div style="display:flex;align-items:center;gap:.5rem;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${col};flex-shrink:0;box-shadow:0 0 6px ${col};"></span>
+            <div style="flex:1;min-width:0;">
+              <p style="font-size:.72rem;font-weight:600;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                ${trip.driver} · Trip #${trip.trip_id}
+              </p>
+              ${trip.current_node_name ? `<p style="font-size:.65rem;color:rgba(255,255,255,.35);">📍 ${trip.current_node_name}</p>` : ''}
+            </div>
+          </div>`;
+        }).join('');
+      }
+    }
+
+    trips.forEach((trip, ti) => {
+      const color = TRIP_COLORS[ti % TRIP_COLORS.length];
+      const route = trip.route_node_ids;
+
+      /* draw route edges as glowing highlighted lines */
+      for (let i = 0; i < route.length - 1; i++) {
+        const fromId = route[i], toId = route[i + 1];
+        if (!edgeSet.has(buildEdgeKey(fromId, toId))) continue;
+        const src = nodeById[fromId], tgt = nodeById[toId];
+        if (!src || !tgt) continue;
+
+        /* thick glow */
+        tripEdgeGroup.append('line')
+          .attr('x1', src.x || 0).attr('y1', src.y || 0)
+          .attr('x2', tgt.x || 0).attr('y2', tgt.y || 0)
+          .attr('stroke', color)
+          .attr('stroke-width', 5)
+          .attr('opacity', .35)
+          .attr('filter','url(#glow)');
+
+        /* bright core */
+        tripEdgeGroup.append('line')
+          .attr('class','trip-edge-glow')
+          .attr('x1', src.x || 0).attr('y1', src.y || 0)
+          .attr('x2', tgt.x || 0).attr('y2', tgt.y || 0)
+          .attr('stroke', color)
+          .attr('stroke-width', 2.5)
+          .attr('opacity', .85);
+      }
+
+      /* driver marker at current node */
+      if (trip.current_node_id) {
+        const cur = nodeById[trip.current_node_id];
+        if (cur) {
+          const cg = tripCarGroup.append('g')
+            .attr('transform', `translate(${cur.x || 0},${cur.y || 0})`);
+
+          /* pulse rings */
+          cg.append('circle').attr('class','driver-ring1')
+            .attr('r', 22).attr('fill','none')
+            .attr('stroke', color).attr('stroke-width', 2.5).attr('opacity',.9);
+          cg.append('circle').attr('class','driver-ring2')
+            .attr('r', 30).attr('fill','none')
+            .attr('stroke', color).attr('stroke-width', 1.2).attr('opacity',.55);
+
+          /* solid dot */
+          cg.append('circle')
+            .attr('r', 10).attr('fill', color)
+            .attr('stroke','#fff').attr('stroke-width',2.5)
+            .attr('filter','url(#glow)');
+
+          /* car emoji */
+          cg.append('text')
+            .attr('text-anchor','middle').attr('dominant-baseline','central')
+            .attr('font-size','11px').attr('pointer-events','none')
+            .text('🚗');
+
+          /* driver label */
+          cg.append('text')
+            .attr('text-anchor','middle').attr('dy', 26)
+            .attr('font-size','9px').attr('font-weight','700')
+            .attr('fill', color).attr('font-family','Inter,sans-serif')
+            .attr('filter','url(#glow-soft)')
+            .text(trip.driver);
+        }
+      }
+    });
+
+    /* after first fetch, keep edge positions updated by ticking */
+    updateTripOverlayPositions();
+
+  } catch(e) { /* silent */ }
+}
+
+function updateTripOverlayPositions() {
+  /* re-read positions in case sim moved unpinned nodes */
+  tripEdgeGroup.selectAll('line').each(function() {
+    /* lines are drawn with absolute coords from node positions;
+       since our nodes are pinned (fx/fy set), positions are stable.
+       No re-draw needed unless a new trip loads. */
+  });
+}
+
+/* initial load + poll every 12s */
+loadActiveTrips();
+setInterval(loadActiveTrips, 12000);
+</script>
+{% endblock %}

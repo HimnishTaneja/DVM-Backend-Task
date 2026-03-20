@@ -1,0 +1,395 @@
+{% extends "base.html" %}
+{% block title %}Trip #{{ trip.id }} — CarpoolNet{% endblock %}
+
+{% block extra_head %}
+<style>
+  @keyframes pulse-ring {
+    0%   { transform:scale(1);   opacity:.8; }
+    70%  { transform:scale(1.7); opacity:0;  }
+    100% { transform:scale(1);   opacity:0;  }
+  }
+  .live-dot::before {
+    content:'';
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    background:#10b981;
+    animation:pulse-ring 1.4s cubic-bezier(0,0,.2,1) infinite;
+  }
+  .live-dot {
+    position:relative;
+    width:10px;height:10px;
+    border-radius:50%;
+    background:#10b981;
+    display:inline-block;
+    flex-shrink:0;
+  }
+  .route-step { transition:background .3s,border-color .3s; }
+  .route-step.current { background:#eff6ff; border-color:#bfdbfe; }
+  .route-step.passed  { opacity:.55; }
+  .node-dot {
+    width:20px;height:20px;
+    border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    border:3px solid #fff;
+    flex-shrink:0;
+  }
+  .next-stop-btn {
+    background:linear-gradient(135deg,#059669,#047857);
+    color:#fff;
+    border:none;
+    border-radius:12px;
+    padding:.75rem 1.5rem;
+    font-weight:800;
+    font-size:1rem;
+    cursor:pointer;
+    width:100%;
+    display:flex;align-items:center;justify-content:center;gap:.5rem;
+    transition:filter .15s,transform .1s;
+    margin-bottom:.5rem;
+  }
+  .next-stop-btn:hover  { filter:brightness(1.1);transform:translateY(-1px); }
+  .next-stop-btn:active { transform:scale(.98); }
+  .next-stop-btn:disabled { background:#9ca3af;cursor:not-allowed;transform:none;filter:none; }
+  .complete-btn {
+    background:linear-gradient(135deg,#0066f5,#0043b0);
+    color:#fff;
+    border:none;
+    border-radius:12px;
+    padding:.65rem 1.25rem;
+    font-weight:700;
+    font-size:.875rem;
+    cursor:pointer;
+    width:100%;
+    display:flex;align-items:center;justify-content:center;gap:.5rem;
+    transition:filter .15s;
+  }
+  .complete-btn:hover { filter:brightness(1.1); }
+  #progress-bar-fill { transition:width .6s ease; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="margin-bottom:1.5rem;">
+  <a href="{% url 'rides:driver_dashboard' %}" style="display:inline-flex;align-items:center;gap:.375rem;font-size:.875rem;color:#0066f5;text-decoration:none;">
+    <svg style="width:16px;height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <div style="margin-top:.75rem;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem;">
+    <div>
+      <div style="display:flex;align-items:center;gap:.75rem;">
+        <h1 style="font-size:1.5rem;font-weight:800;color:#111827;">Trip #{{ trip.id }}</h1>
+        {% if trip.status == 'active' %}
+        <div style="display:flex;align-items:center;gap:.4rem;background:#ecfdf5;border:1.5px solid #6ee7b7;border-radius:20px;padding:.2rem .6rem;">
+          <span class="live-dot"></span>
+          <span style="font-size:.7rem;font-weight:800;color:#065f46;text-transform:uppercase;letter-spacing:.06em;">Live</span>
+        </div>
+        {% endif %}
+      </div>
+      <p style="font-size:.875rem;color:#9ca3af;margin-top:.25rem;">{{ trip.start_node.name }} → {{ trip.end_node.name }}</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+      <span class="badge {% if trip.status == 'active' %}badge-green{% elif trip.status == 'completed' %}badge-blue{% else %}badge-red{% endif %}" style="font-size:.8rem;padding:.3rem .75rem;">
+        {{ trip.get_status_display }}
+      </span>
+      {% if trip.status == 'active' %}
+      <a href="{% url 'rides:driver_requests' trip.id %}" class="btn btn-primary btn-sm">All Requests</a>
+      <form method="post" action="{% url 'rides:cancel_trip' trip.id %}" style="display:inline;"
+            onsubmit="return confirm('Cancel this trip?')">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Progress bar -->
+{% if trip.status == 'active' %}
+<div class="card p-4" style="margin-bottom:1.5rem;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;">
+    <span style="font-size:.75rem;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.04em;">Route Progress</span>
+    <span id="progress-label" style="font-size:.75rem;font-weight:700;color:#0066f5;">
+      {{ route|length }} nodes
+    </span>
+  </div>
+  <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+    <div id="progress-bar-fill" style="height:100%;border-radius:4px;background:linear-gradient(90deg,#10b981,#0066f5);width:0%;"></div>
+  </div>
+  <p style="font-size:.72rem;color:#9ca3af;margin-top:.375rem;" id="progress-detail">Calculating…</p>
+</div>
+{% endif %}
+
+<div style="display:grid;grid-template-columns:1fr 2fr;gap:1.5rem;align-items:start;">
+
+  <!-- Left: Route + Controls -->
+  <div>
+    <div class="card p-5">
+      <h2 class="section-title" style="margin-bottom:1rem;">Route</h2>
+      <ol id="route-list" style="position:relative;border-left:2px solid #bfdbfe;margin-left:.75rem;">
+        {% for step in route %}
+        <li class="route-step {% if step.passed %}passed{% elif step.node == trip.current_node %}current{% endif %}"
+            data-node-id="{{ step.node.id }}"
+            data-passed="{{ step.passed|yesno:'true,false' }}"
+            data-current="{% if step.node == trip.current_node %}true{% else %}false{% endif %}"
+            style="margin-bottom:0;margin-left:1.25rem;padding:.5rem .5rem .5rem 0;position:relative;list-style:none;border-radius:8px;">
+          <div class="node-dot" style="position:absolute;left:-1.625rem;top:.5rem;
+            {% if step.passed %}background:#10b981;
+            {% elif step.node == trip.current_node %}background:#0066f5;
+            {% else %}background:#d1d5db;{% endif %}">
+          </div>
+          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;padding-bottom:.5rem;">
+            <p style="font-size:.875rem;
+              font-weight:{% if step.node == trip.current_node %}800{% else %}500{% endif %};
+              {% if step.passed %}color:#9ca3af;text-decoration:line-through;
+              {% elif step.node == trip.current_node %}color:#0052d9;
+              {% else %}color:#374151;{% endif %}">
+              {{ step.node.name }}
+            </p>
+            {% if step.node == trip.current_node %}
+            <span class="badge badge-blue" style="font-size:.65rem;padding:.15rem .4rem;">📍 Here</span>
+            {% endif %}
+            {% if step.passed %}
+            <span style="color:#10b981;font-size:.75rem;">✓</span>
+            {% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+
+    {% if trip.status == 'active' %}
+    <!-- Driver controls -->
+    <div class="card p-5" style="margin-top:1rem;">
+      <h2 class="section-title" style="margin-bottom:.75rem;">Driver Controls</h2>
+      <div id="ctrl-result" style="display:none;margin-bottom:.75rem;padding:.75rem;border-radius:8px;font-size:.875rem;"></div>
+
+      <!-- Next Stop button -->
+      <button id="next-stop-btn" onclick="advanceNextStop()" class="next-stop-btn">
+        <svg style="width:18px;height:18px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
+        </svg>
+        Next Stop ▶
+      </button>
+      <p id="next-stop-label" style="font-size:.72rem;color:#9ca3af;text-align:center;margin-bottom:1rem;"></p>
+
+      <!-- Manual selector (collapsed, for override) -->
+      <details style="margin-bottom:.75rem;">
+        <summary style="font-size:.75rem;color:#6b7280;cursor:pointer;user-select:none;">Override position manually</summary>
+        <div style="margin-top:.5rem;display:flex;gap:.5rem;">
+          <select id="node-select" class="form-input" style="flex:1;">
+            {% for step in route %}{% if not step.passed %}
+            <option value="{{ step.node.id }}">{{ step.node.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+          <button onclick="updateNodeManual()" class="btn btn-secondary btn-sm">Set</button>
+        </div>
+      </details>
+
+      <!-- Complete Trip -->
+      <div style="border-top:1px solid #e5e7eb;padding-top:.75rem;">
+        <div id="complete-result" style="display:none;margin-bottom:.5rem;padding:.75rem;border-radius:8px;font-size:.875rem;"></div>
+        <button onclick="completeTrip()" class="complete-btn">
+          <svg style="width:16px;height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+          </svg>
+          Complete Trip &amp; Settle Fares
+        </button>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Right: Passengers -->
+  <div style="display:flex;flex-direction:column;gap:1.5rem;">
+
+    <!-- Confirmed passengers -->
+    <div class="card p-5">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">
+        <h2 class="section-title">Confirmed Passengers</h2>
+        <span class="badge badge-green" id="pax-count">{{ confirmed_requests.count }} / {{ trip.max_passengers }}</span>
+      </div>
+      <div id="pax-list">
+        {% if confirmed_requests %}
+        {% for req in confirmed_requests %}
+        <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem;background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;margin-bottom:.5rem;">
+          <div style="width:36px;height:36px;background:#bbf7d0;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#166534;font-weight:700;font-size:.8rem;flex-shrink:0;">
+            {{ req.passenger.username|slice:":1"|upper }}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <p style="font-size:.875rem;font-weight:600;color:#111827;">{{ req.passenger.username }}</p>
+            <p style="font-size:.75rem;color:#9ca3af;">{{ req.pickup_node.name }} → {{ req.destination_node.name }}</p>
+          </div>
+          {% with offer=req.offers.first %}
+          {% if offer %}
+          <div style="text-align:right;flex-shrink:0;">
+            <p style="font-size:.875rem;font-weight:700;color:#059669;">${{ offer.fare }}</p>
+            <p style="font-size:.72rem;color:#9ca3af;">+{{ offer.detour_nodes }} hop{{ offer.detour_nodes|pluralize }}</p>
+          </div>
+          {% endif %}
+          {% endwith %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <p style="font-size:.875rem;color:#9ca3af;text-align:center;padding:1rem 0;">No confirmed passengers yet.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Pending offers -->
+    {% if offers_made %}
+    <div class="card p-5">
+      <h2 class="section-title" style="margin-bottom:1rem;">Pending Offers</h2>
+      <div style="display:flex;flex-direction:column;gap:.75rem;">
+        {% for offer in offers_made %}
+        {% if offer.request.status == 'pending' %}
+        <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem;background:#fffbeb;border-radius:10px;border:1px solid #fde68a;">
+          <div style="width:36px;height:36px;background:#fde68a;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#92400e;font-weight:700;font-size:.8rem;flex-shrink:0;">
+            {{ offer.request.passenger.username|slice:":1"|upper }}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <p style="font-size:.875rem;font-weight:600;color:#111827;">{{ offer.request.passenger.username }}</p>
+            <p style="font-size:.75rem;color:#9ca3af;">{{ offer.request.pickup_node.name }} → {{ offer.request.destination_node.name }}</p>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <p style="font-size:.875rem;font-weight:700;color:#d97706;">${{ offer.fare }}</p>
+            <p style="font-size:.72rem;color:#9ca3af;">+{{ offer.detour_nodes }} hop{{ offer.detour_nodes|pluralize }}</p>
+          </div>
+          <span class="badge badge-amber">Awaiting</span>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const tripId = {{ trip.id }};
+const tripStatus = '{{ trip.status }}';
+
+/* ── helpers ── */
+function getCsrf() {
+  let v = null;
+  document.cookie.split(';').forEach(c => {
+    c = c.trim();
+    if (c.startsWith('csrftoken=')) v = decodeURIComponent(c.slice(10));
+  });
+  return v;
+}
+
+function showResult(el, ok, msg) {
+  el.style.display = 'block';
+  el.style.background = ok ? '#f0fdf4' : '#fef2f2';
+  el.style.color      = ok ? '#166534' : '#991b1b';
+  el.textContent = msg;
+}
+
+/* ── Live status polling ── */
+let nextNodeId   = null;
+let nextNodeName = null;
+
+async function pollStatus() {
+  try {
+    const res  = await fetch(`/api/trip/${tripId}/status/`);
+    const data = await res.json();
+    if (!res.ok) return;
+
+    /* progress bar */
+    const pct  = data.progress_pct || 0;
+    const fill = document.getElementById('progress-bar-fill');
+    const lbl  = document.getElementById('progress-label');
+    const det  = document.getElementById('progress-detail');
+    if (fill) fill.style.width = pct + '%';
+    if (lbl)  lbl.textContent  = `${data.passed_count} / ${data.total_nodes} nodes`;
+    if (det)  det.textContent  = data.current_node
+      ? `Driver at: ${data.current_node.name}`
+      : 'Trip not started yet';
+
+    /* next stop label */
+    const nextBtn  = document.getElementById('next-stop-btn');
+    const nextLbl  = document.getElementById('next-stop-label');
+    if (data.next_node) {
+      nextNodeId   = data.next_node.id;
+      nextNodeName = data.next_node.name;
+      if (nextLbl) nextLbl.textContent = `Next: ${nextNodeName}`;
+      if (nextBtn) nextBtn.disabled = false;
+    } else {
+      nextNodeId = null;
+      if (nextLbl) nextLbl.textContent = 'All nodes passed — ready to complete';
+      if (nextBtn) nextBtn.disabled = true;
+    }
+
+    /* if trip completed remotely, reload */
+    if (data.status !== 'active' && tripStatus === 'active') {
+      setTimeout(() => location.reload(), 1000);
+    }
+  } catch(e) { /* silent — network hiccup */ }
+}
+
+/* ── Next Stop button ── */
+async function advanceNextStop() {
+  if (!nextNodeId) return;
+  const el = document.getElementById('ctrl-result');
+  const btn = document.getElementById('next-stop-btn');
+  btn.disabled = true;
+  try {
+    const res  = await fetch(`/api/trip/${tripId}/update-node/`, {
+      method:  'POST',
+      headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+      body:    JSON.stringify({node_id: nextNodeId}),
+    });
+    const data = await res.json();
+    showResult(el, res.ok, data.message || data.error);
+    if (res.ok) {
+      setTimeout(() => { location.reload(); }, 900);
+    } else {
+      btn.disabled = false;
+    }
+  } catch(e) { showResult(el, false, 'Network error.'); btn.disabled = false; }
+}
+
+/* ── Manual override ── */
+async function updateNodeManual() {
+  const nodeId = document.getElementById('node-select').value;
+  const el = document.getElementById('ctrl-result');
+  try {
+    const res  = await fetch(`/api/trip/${tripId}/update-node/`, {
+      method:  'POST',
+      headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+      body:    JSON.stringify({node_id: parseInt(nodeId)}),
+    });
+    const data = await res.json();
+    showResult(el, res.ok, data.message || data.error);
+    if (res.ok) setTimeout(() => location.reload(), 1200);
+  } catch(e) { showResult(el, false, 'Network error.'); }
+}
+
+/* ── Complete trip ── */
+async function completeTrip() {
+  if (!confirm('Complete this trip and settle all passenger fares?')) return;
+  const el = document.getElementById('complete-result');
+  try {
+    const res  = await fetch(`/api/trip/${tripId}/complete/`, {
+      method:  'POST',
+      headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    });
+    const data = await res.json();
+    showResult(el, res.ok, data.message || data.error);
+    if (res.ok) setTimeout(() => location.reload(), 1500);
+  } catch(e) { showResult(el, false, 'Network error.'); }
+}
+
+/* ── Bootstrap ── */
+if (tripStatus === 'active') {
+  pollStatus();
+  setInterval(pollStatus, 6000);
+}
+</script>
+{% endblock %}

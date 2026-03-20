@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Carpool Requests — Trip #{{ trip.id }}{% endblock %}
+
+{% block content %}
+<div style="margin-bottom:1.5rem;">
+  <a href="{% url 'rides:trip_detail' trip.id %}" style="display:inline-flex;align-items:center;gap:.375rem;font-size:.875rem;color:#0066f5;text-decoration:none;">
+    <svg style="width:16px;height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+    Back to Trip #{{ trip.id }}
+  </a>
+  <div style="margin-top:.75rem;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem;">
+    <div>
+      <h1 style="font-size:1.5rem;font-weight:800;color:#111827;">Incoming Carpool Requests</h1>
+      <p style="font-size:.875rem;color:#9ca3af;margin-top:.25rem;">{{ trip.start_node.name }} → {{ trip.end_node.name }} · Max {{ trip.max_passengers }} passengers</p>
+    </div>
+    <button onclick="refreshRequests()" class="btn btn-secondary btn-sm">
+      <svg id="refresh-icon" style="width:16px;height:16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+      </svg>
+      Refresh
+    </button>
+  </div>
+</div>
+
+<!-- Eligible new requests -->
+<div style="margin-bottom:2rem;">
+  <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">
+    <h2 class="section-title">Eligible Requests</h2>
+    <span class="badge badge-blue">{{ eligible_requests|length }}</span>
+  </div>
+
+  {% if eligible_requests %}
+  <div style="display:flex;flex-direction:column;gap:1rem;">
+    {% for item in eligible_requests %}
+    <div class="card p-5" style="border-left:4px solid #0066f5;">
+      <div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:1rem;">
+        <div style="display:flex;align-items:flex-start;gap:1rem;">
+          <div style="width:44px;height:44px;background:#eff6ff;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#0052d9;font-weight:700;flex-shrink:0;">
+            {{ item.request.passenger.username|slice:":1"|upper }}
+          </div>
+          <div>
+            <p style="font-weight:600;color:#111827;">{{ item.request.passenger.username }}</p>
+            <p style="font-size:.875rem;color:#6b7280;margin-top:.25rem;">
+              <span style="display:inline-flex;align-items:center;gap:.25rem;">
+                <span style="color:#10b981;font-size:.65rem;">●</span>
+                Pickup: <strong>{{ item.request.pickup_node.name }}</strong>
+              </span>
+              <span style="margin:0 .5rem;color:#d1d5db;">·</span>
+              <span style="display:inline-flex;align-items:center;gap:.25rem;">
+                <span style="color:#ef4444;font-size:.65rem;">●</span>
+                Drop-off: <strong>{{ item.request.destination_node.name }}</strong>
+              </span>
+            </p>
+            <p style="font-size:.72rem;color:#9ca3af;margin-top:.25rem;">Requested {{ item.request.created_at|date:"M d, H:i" }}</p>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.75rem;">
+          <div style="display:flex;gap:1.5rem;">
+            <div style="text-align:center;">
+              <p style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;">Detour</p>
+              <p style="font-size:1.125rem;font-weight:800;{% if item.detour_nodes == 0 %}color:#059669;{% elif item.detour_nodes <= 2 %}color:#d97706;{% else %}color:#dc2626;{% endif %}">
+                +{{ item.detour_nodes }} hop{{ item.detour_nodes|pluralize }}
+              </p>
+            </div>
+            <div style="text-align:center;">
+              <p style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;">Fare</p>
+              <p style="font-size:1.125rem;font-weight:800;color:#059669;">${{ item.fare }}</p>
+            </div>
+          </div>
+          <form method="post" action="{% url 'rides:make_offer_view' trip.id %}">
+            {% csrf_token %}
+            <input type="hidden" name="request_id" value="{{ item.request.id }}" />
+            <button type="submit" class="btn btn-primary btn-sm">✋ Make Offer</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% else %}
+  <div class="card p-10" style="text-align:center;">
+    <span style="font-size:2.5rem;">🔍</span>
+    <p style="margin-top:.75rem;font-weight:600;color:#374151;">No eligible requests right now</p>
+    <p style="margin-top:.25rem;font-size:.875rem;color:#9ca3af;">Passengers within 2 hops of your remaining route will appear here.</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Existing offers -->
+{% if existing_offers %}
+<div>
+  <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">
+    <h2 class="section-title">Offers Already Made</h2>
+    <span class="badge badge-amber">{{ existing_offers.count }}</span>
+  </div>
+  <div class="card" style="overflow:hidden;">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>Passenger</th>
+          <th>Route</th>
+          <th>Detour</th>
+          <th>Fare</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for offer in existing_offers %}
+        <tr>
+          <td style="font-weight:600;">{{ offer.request.passenger.username }}</td>
+          <td>{{ offer.request.pickup_node.name }} → {{ offer.request.destination_node.name }}</td>
+          <td style="font-weight:600;color:#d97706;">+{{ offer.detour_nodes }}</td>
+          <td style="font-weight:700;color:#059669;">${{ offer.fare }}</td>
+          <td>
+            <span class="badge {% if offer.request.status == 'confirmed' %}badge-green{% elif offer.request.status == 'pending' %}badge-amber{% else %}badge-gray{% endif %}">
+              {{ offer.request.get_status_display }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+async function refreshRequests() {
+  const icon = document.getElementById('refresh-icon');
+  icon.style.animation = 'spin 1s linear infinite';
+  try {
+    const res = await fetch('/rides/api/trip/{{ trip.id }}/requests/');
+    if (res.ok) location.reload();
+  } finally {
+    setTimeout(() => icon.style.animation = '', 800);
+  }
+}
+</script>
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+{% endblock %}

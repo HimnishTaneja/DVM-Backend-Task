@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Create Account — CarpoolNet{% endblock %}
+
+{% block content %}
+<div style="min-height:70vh;display:flex;align-items:center;justify-content:center;">
+  <div style="width:100%;max-width:420px;">
+    <div class="card p-8">
+      <div style="text-align:center;margin-bottom:2rem;">
+        <div style="width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#0066f5,#0043b0);display:flex;align-items:center;justify-content:center;margin:0 auto;font-size:1.5rem;box-shadow:0 4px 12px rgba(0,102,245,.3);">🚗</div>
+        <h1 style="margin-top:1rem;font-size:1.5rem;font-weight:800;color:#111827;">Join CarpoolNet</h1>
+        <p style="margin-top:.25rem;font-size:.875rem;color:#9ca3af;">Create your account to get started</p>
+      </div>
+
+      <form method="post" class="space-y-4">
+        {% csrf_token %}
+
+        <!-- Username -->
+        <div>
+          <label for="{{ form.username.id_for_label }}" class="form-label">Username</label>
+          <input type="text" name="username" id="{{ form.username.id_for_label }}"
+                 {% if form.username.value %}value="{{ form.username.value }}"{% endif %}
+                 class="form-input" required />
+          {% for err in form.username.errors %}<p style="margin-top:.25rem;font-size:.75rem;color:#dc2626;">{{ err }}</p>{% endfor %}
+        </div>
+
+        <!-- Email -->
+        <div>
+          <label for="{{ form.email.id_for_label }}" class="form-label">Email</label>
+          <input type="email" name="email" id="{{ form.email.id_for_label }}"
+                 {% if form.email.value %}value="{{ form.email.value }}"{% endif %}
+                 class="form-input" required />
+          {% for err in form.email.errors %}<p style="margin-top:.25rem;font-size:.75rem;color:#dc2626;">{{ err }}</p>{% endfor %}
+        </div>
+
+        <!-- Role -->
+        <div>
+          <label class="form-label">I want to</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.375rem;">
+            <label style="cursor:pointer;">
+              <input type="radio" name="role" value="passenger" class="sr-only"
+                     {% if not form.role.value or form.role.value == 'passenger' %}checked{% endif %}
+                     onchange="updateRoleCards()" />
+              <div class="role-card" style="display:flex;flex-direction:column;align-items:center;gap:.5rem;padding:1rem;border:2px solid #e5e7eb;border-radius:12px;font-size:.875rem;font-weight:600;transition:all .15s;text-align:center;">
+                <span style="font-size:1.5rem;">👤</span>
+                <span style="color:#374151;">Ride as Passenger</span>
+              </div>
+            </label>
+            <label style="cursor:pointer;">
+              <input type="radio" name="role" value="driver" class="sr-only"
+                     {% if form.role.value == 'driver' %}checked{% endif %}
+                     onchange="updateRoleCards()" />
+              <div class="role-card" style="display:flex;flex-direction:column;align-items:center;gap:.5rem;padding:1rem;border:2px solid #e5e7eb;border-radius:12px;font-size:.875rem;font-weight:600;transition:all .15s;text-align:center;">
+                <span style="font-size:1.5rem;">🚕</span>
+                <span style="color:#374151;">Drive &amp; Earn</span>
+              </div>
+            </label>
+          </div>
+          {% for err in form.role.errors %}<p style="margin-top:.25rem;font-size:.75rem;color:#dc2626;">{{ err }}</p>{% endfor %}
+        </div>
+
+        <!-- Password -->
+        <div>
+          <label for="{{ form.password1.id_for_label }}" class="form-label">Password</label>
+          <input type="password" name="password1" id="{{ form.password1.id_for_label }}"
+                 class="form-input" required />
+          {% for err in form.password1.errors %}<p style="margin-top:.25rem;font-size:.75rem;color:#dc2626;">{{ err }}</p>{% endfor %}
+        </div>
+
+        <div>
+          <label for="{{ form.password2.id_for_label }}" class="form-label">Confirm Password</label>
+          <input type="password" name="password2" id="{{ form.password2.id_for_label }}"
+                 class="form-input" required />
+          {% for err in form.password2.errors %}<p style="margin-top:.25rem;font-size:.75rem;color:#dc2626;">{{ err }}</p>{% endfor %}
+        </div>
+
+        {% if form.non_field_errors %}
+        <div style="padding:.75rem 1rem;background:#fef2f2;border-radius:10px;border:1px solid #fecaca;">
+          {% for err in form.non_field_errors %}<p style="font-size:.875rem;color:#991b1b;">{{ err }}</p>{% endfor %}
+        </div>
+        {% endif %}
+
+        <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">Create Account</button>
+      </form>
+
+      <p style="margin-top:1.5rem;text-align:center;font-size:.875rem;color:#9ca3af;">
+        Already have an account?
+        <a href="{% url 'users:login' %}" style="font-weight:600;color:#0066f5;text-decoration:none;">Sign in</a>
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+function updateRoleCards() {
+  document.querySelectorAll('input[name="role"]').forEach(r => {
+    const card = r.nextElementSibling;
+    card.style.borderColor = r.checked ? '#0066f5' : '#e5e7eb';
+    card.style.background  = r.checked ? '#eff6ff' : '';
+    card.querySelector('span:last-child').style.color = r.checked ? '#0052d9' : '#374151';
+  });
+}
+document.addEventListener('DOMContentLoaded', updateRoleCards);
+</script>
+{% endblock %}

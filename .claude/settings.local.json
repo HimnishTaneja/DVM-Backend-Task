@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venvScriptspython manage.py dbshell -- \".schema billing_transaction\")",
+      "mcp__Desktop_Commander__start_process",
+      "mcp__Desktop_Commander__read_process_output"
+    ]
+  }
+}
