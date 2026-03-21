@@ -250,17 +250,29 @@ def complete_trip(request, trip_id):
 
     from billing.models import Wallet, Transaction
 
-    # Check balances first
+    confirmed_reqs = list(
+        trip.accepted_passengers
+        .filter(status='confirmed')
+        .select_related('passenger')
+    )
+
+    # --- Single-pass: lock wallets, validate balances, then deduct ---
+    # select_for_update locks rows so no concurrent request can read stale balances.
+    fare_map = {}  # req.id -> (passenger_wallet, offer)
     insufficient = []
-    for req in trip.accepted_passengers.filter(status='confirmed').select_related('passenger'):
+
+    for req in confirmed_reqs:
         offer = req.offers.filter(trip=trip).first()
-        if offer:
-            try:
-                wallet = req.passenger.wallet
-                if wallet.balance < offer.fare:
-                    insufficient.append(req.passenger.username)
-            except Wallet.DoesNotExist:
+        if not offer:
+            continue
+        try:
+            wallet = Wallet.objects.select_for_update().get(user=req.passenger)
+            if wallet.balance < offer.fare:
                 insufficient.append(req.passenger.username)
+            else:
+                fare_map[req.id] = (wallet, offer)
+        except Wallet.DoesNotExist:
+            insufficient.append(req.passenger.username)
 
     if insufficient:
         return Response(
@@ -271,26 +283,34 @@ def complete_trip(request, trip_id):
     trip.status = 'completed'
     trip.save(update_fields=['status'])
 
-    for req in trip.accepted_passengers.filter(status='confirmed').select_related('passenger'):
-        offer = req.offers.filter(trip=trip).first()
-        if offer:
-            passenger_wallet = req.passenger.wallet
-            driver_wallet, _ = Wallet.objects.get_or_create(user=trip.driver)
+    # Ensure driver wallet exists, then lock it
+    Wallet.objects.get_or_create(user=trip.driver)
+    driver_wallet = Wallet.objects.select_for_update().get(user=trip.driver)
 
-            passenger_wallet.balance -= offer.fare
-            passenger_wallet.save()
-            Transaction.objects.create(
-                wallet=passenger_wallet, amount=offer.fare,
-                transaction_type='payment',
-                description=f'Carpool fare — Trip #{trip.id}',
-            )
-            driver_wallet.balance += offer.fare
-            driver_wallet.save()
-            Transaction.objects.create(
-                wallet=driver_wallet, amount=offer.fare,
-                transaction_type='receipt',
-                description=f'Carpool earnings — Trip #{trip.id}',
-            )
+    for req in confirmed_reqs:
+        if req.id not in fare_map:
+            req.status = 'completed'
+            req.save(update_fields=['status'])
+            continue
+
+        passenger_wallet, offer = fare_map[req.id]
+
+        passenger_wallet.balance -= offer.fare
+        passenger_wallet.save()
+        Transaction.objects.create(
+            wallet=passenger_wallet, amount=offer.fare,
+            transaction_type='payment',
+            description=f'Carpool fare — Trip #{trip.id}',
+        )
+
+        driver_wallet.balance += offer.fare
+        driver_wallet.save()
+        Transaction.objects.create(
+            wallet=driver_wallet, amount=offer.fare,
+            transaction_type='receipt',
+            description=f'Carpool earnings — Trip #{trip.id}',
+        )
+
         req.status = 'completed'
         req.save(update_fields=['status'])
 

@@ -1,3 +1,6 @@
+from functools import wraps
+
+from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.db import transaction
@@ -5,7 +8,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.http import require_POST
 
 from network.models import Node
-from network.services import get_shortest_path, calculate_detour, calculate_fare
+from network.services import get_shortest_path, build_graph, is_within_proximity, calculate_detour, calculate_fare
 from users.models import CustomUser
 from .models import Trip, TripSequence, CarpoolRequest, CarpoolOffer
 
@@ -15,11 +18,9 @@ from .models import Trip, TripSequence, CarpoolRequest, CarpoolOffer
 # ---------------------------------------------------------------------------
 
 def _driver_required(view_func):
-    from functools import wraps
+    @login_required
     @wraps(view_func)
     def _wrapped(request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            return redirect('users:login')
         if request.user.role != CustomUser.IS_DRIVER:
             messages.error(request, 'Driver access required.')
             return redirect('users:dashboard')
@@ -28,11 +29,9 @@ def _driver_required(view_func):
 
 
 def _passenger_required(view_func):
-    from functools import wraps
+    @login_required
     @wraps(view_func)
     def _wrapped(request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            return redirect('users:login')
         if request.user.role != CustomUser.IS_PASSENGER:
             messages.error(request, 'Passenger access required.')
             return redirect('users:dashboard')
@@ -41,14 +40,74 @@ def _passenger_required(view_func):
 
 
 # ---------------------------------------------------------------------------
+# Shared matching helper (used by driver_dashboard and driver_requests)
+# ---------------------------------------------------------------------------
+
+def _find_matching_requests(trip, graph, proximity):
+    """
+    Return a list of dicts describing pending CarpoolRequests that can be
+    served by *trip*, together with their pre-calculated detour and fare.
+
+    Reuses the caller's pre-built graph to avoid repeated DB hits.
+    """
+    remaining_ids = list(
+        trip.route_sequence.filter(passed=False)
+        .order_by('order')
+        .values_list('node_id', flat=True)
+    )
+    if not remaining_ids:
+        return []
+
+    offered_ids = set(
+        CarpoolOffer.objects.filter(trip=trip).values_list('request_id', flat=True)
+    )
+
+    results = []
+    pending_reqs = (
+        CarpoolRequest.objects
+        .filter(status='pending')
+        .exclude(id__in=offered_ids)
+        .select_related('passenger', 'pickup_node', 'destination_node')
+    )
+
+    for req in pending_reqs:
+        if not (
+            is_within_proximity(req.pickup_node_id, remaining_ids, proximity, graph)
+            and is_within_proximity(req.destination_node_id, remaining_ids, proximity, graph)
+        ):
+            continue
+
+        det = calculate_detour(remaining_ids, req.pickup_node_id, req.destination_node_id, graph)
+        if not det:
+            continue
+
+        confirmed_pax = []
+        for cr in trip.accepted_passengers.filter(status='confirmed'):
+            try:
+                p_idx = det['new_route'].index(cr.pickup_node_id)
+                d_idx = det['new_route'].index(cr.destination_node_id, p_idx)
+                confirmed_pax.append({'pickup_index': p_idx, 'dropoff_index': d_idx})
+            except ValueError:
+                pass
+
+        fare = calculate_fare(det['new_route'], det['pickup_index'], det['dropoff_index'], confirmed_pax)
+        results.append({
+            'request':      req,
+            'trip':         trip,
+            'fare':         fare,
+            'detour_nodes': det['detour_nodes'],
+            'seats_left':   trip.max_passengers - trip.accepted_passengers.filter(status='confirmed').count(),
+        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Driver views
 # ---------------------------------------------------------------------------
 
 @_driver_required
 def driver_dashboard(request):
-    from django.conf import settings
-    from network.services import build_graph, is_within_proximity
-
     active_trips = list(Trip.objects.filter(driver=request.user, status='active').order_by('-created_at'))
     past_trips = Trip.objects.filter(
         driver=request.user, status__in=['completed', 'cancelled']
@@ -59,64 +118,20 @@ def driver_dashboard(request):
     except Exception:
         wallet = None
 
-    # ── Uber-style: surface matching passenger requests across all active trips ──
+    # Build graph once; reuse across all trip matching calls
     graph     = build_graph()
     proximity = getattr(settings, 'CARPOOL_PROXIMITY_NODES', 2)
     incoming  = []
     seen_req_ids = set()
 
     for trip in active_trips:
-        remaining_ids = list(
-            trip.route_sequence.filter(passed=False)
-            .order_by('order')
-            .values_list('node_id', flat=True)
-        )
-        if not remaining_ids:
-            continue
-
-        seats_taken = trip.accepted_passengers.filter(status='confirmed').count()
-        seats_left  = trip.max_passengers - seats_taken
+        seats_left = trip.max_passengers - trip.accepted_passengers.filter(status='confirmed').count()
         if seats_left <= 0:
             continue
-
-        offered_ids = set(
-            CarpoolOffer.objects.filter(trip=trip).values_list('request_id', flat=True)
-        )
-
-        pending_reqs = (
-            CarpoolRequest.objects
-            .filter(status='pending')
-            .exclude(id__in=offered_ids)
-            .exclude(passenger=request.user)
-            .select_related('passenger', 'pickup_node', 'destination_node')
-        )
-
-        for req in pending_reqs:
-            if req.id in seen_req_ids:
-                continue
-            if (is_within_proximity(req.pickup_node_id, remaining_ids, proximity, graph)
-                    and is_within_proximity(req.destination_node_id, remaining_ids, proximity, graph)):
-                det = calculate_detour(remaining_ids, req.pickup_node_id, req.destination_node_id)
-                if det:
-                    confirmed_pax = []
-                    for cr in trip.accepted_passengers.filter(status='confirmed'):
-                        try:
-                            p_idx = det['new_route'].index(cr.pickup_node_id)
-                            d_idx = det['new_route'].index(cr.destination_node_id, p_idx)
-                            confirmed_pax.append({'pickup_index': p_idx, 'dropoff_index': d_idx})
-                        except ValueError:
-                            pass
-                    fare = calculate_fare(
-                        det['new_route'], det['pickup_index'], det['dropoff_index'], confirmed_pax
-                    )
-                    incoming.append({
-                        'request':      req,
-                        'trip':         trip,
-                        'fare':         fare,
-                        'detour_nodes': det['detour_nodes'],
-                        'seats_left':   seats_left,
-                    })
-                    seen_req_ids.add(req.id)
+        for match in _find_matching_requests(trip, graph, proximity):
+            if match['request'].id not in seen_req_ids:
+                incoming.append(match)
+                seen_req_ids.add(match['request'].id)
 
     return render(request, 'rides/driver_dashboard.html', {
         'active_trips': active_trips,
@@ -142,7 +157,15 @@ def publish_trip(request):
             messages.error(request, 'Start and end nodes must be different.')
             return render(request, 'rides/publish_trip.html', {'nodes': nodes})
 
-        path = get_shortest_path(int(start_id), int(end_id))
+        try:
+            start_id = int(start_id)
+            end_id = int(end_id)
+            max_passengers = max(1, min(int(request.POST.get('max_passengers', 3)), 8))
+        except (ValueError, TypeError):
+            messages.error(request, 'Invalid node or passenger count.')
+            return render(request, 'rides/publish_trip.html', {'nodes': nodes})
+
+        path = get_shortest_path(start_id, end_id)
         if not path:
             messages.error(request, 'No route exists between the selected nodes.')
             return render(request, 'rides/publish_trip.html', {'nodes': nodes})
@@ -150,10 +173,10 @@ def publish_trip(request):
         with transaction.atomic():
             trip = Trip.objects.create(
                 driver=request.user,
-                start_node_id=int(start_id),
-                end_node_id=int(end_id),
-                current_node_id=int(start_id),
-                max_passengers=max(1, min(max_passengers, 8)),
+                start_node_id=start_id,
+                end_node_id=end_id,
+                current_node_id=start_id,
+                max_passengers=max_passengers,
                 status='active',
             )
             for order, node_id in enumerate(path):
@@ -208,49 +231,9 @@ def driver_requests(request, trip_id):
     """SSR page showing all incoming carpool requests for a trip."""
     trip = get_object_or_404(Trip, pk=trip_id, driver=request.user)
 
-    from django.conf import settings
-    from network.services import build_graph, is_within_proximity
-
-    remaining_ids = list(
-        trip.route_sequence.filter(passed=False)
-        .order_by('order')
-        .values_list('node_id', flat=True)
-    )
+    graph     = build_graph()
     proximity = getattr(settings, 'CARPOOL_PROXIMITY_NODES', 2)
-    graph = build_graph()
-
-    offered_ids = set(
-        CarpoolOffer.objects.filter(trip=trip).values_list('request_id', flat=True)
-    )
-
-    eligible = []
-    for req in CarpoolRequest.objects.filter(
-        status='pending'
-    ).exclude(id__in=offered_ids).select_related('passenger', 'pickup_node', 'destination_node'):
-        if (is_within_proximity(req.pickup_node_id, remaining_ids, proximity, graph)
-                and is_within_proximity(req.destination_node_id, remaining_ids, proximity, graph)):
-            # Pre-calculate detour & fare for display
-            det = calculate_detour(remaining_ids, req.pickup_node_id, req.destination_node_id)
-            if det:
-                confirmed_passengers = []
-                for cr in trip.accepted_passengers.filter(status='confirmed'):
-                    try:
-                        p_idx = det['new_route'].index(cr.pickup_node_id)
-                        d_idx = det['new_route'].index(cr.destination_node_id, p_idx)
-                        confirmed_passengers.append({'pickup_index': p_idx, 'dropoff_index': d_idx})
-                    except ValueError:
-                        pass
-                fare = calculate_fare(
-                    det['new_route'],
-                    det['pickup_index'],
-                    det['dropoff_index'],
-                    confirmed_passengers,
-                )
-                eligible.append({
-                    'request': req,
-                    'detour_nodes': det['detour_nodes'],
-                    'fare': fare,
-                })
+    eligible  = _find_matching_requests(trip, graph, proximity)
 
     existing_offers = CarpoolOffer.objects.filter(
         trip=trip
@@ -318,8 +301,11 @@ def accept_request(request, trip_id, request_id):
     Uber-style one-tap accept: driver picks passenger → instantly confirmed.
     Creates the CarpoolOffer and flips the CarpoolRequest to 'confirmed' in one shot.
     """
-    trip        = get_object_or_404(Trip, pk=trip_id, driver=request.user, status='active')
-    carpool_req = get_object_or_404(CarpoolRequest, pk=request_id, status='pending')
+    trip = get_object_or_404(Trip, pk=trip_id, driver=request.user, status='active')
+    # Lock the row so two concurrent accepts for the same request can't both succeed
+    carpool_req = get_object_or_404(
+        CarpoolRequest.objects.select_for_update(), pk=request_id, status='pending'
+    )
 
     if CarpoolOffer.objects.filter(trip=trip, request=carpool_req).exists():
         messages.warning(request, 'You already accepted this ride.')

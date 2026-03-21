@@ -10,9 +10,19 @@ try:
 except ImportError:
     pass
 
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-dev-key-change-in-production-1234')
-DEBUG = os.environ.get('DEBUG', 'True') == 'True'
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
+DEBUG = os.environ.get('DEBUG', 'False') == 'True'
+
+_secret_key = os.environ.get('SECRET_KEY', '')
+if not _secret_key:
+    if not DEBUG:
+        raise RuntimeError(
+            "SECRET_KEY environment variable must be set in production. "
+            "Set DEBUG=True to use the insecure dev key locally."
+        )
+    _secret_key = 'django-insecure-dev-key-change-in-production-1234'
+SECRET_KEY = _secret_key
+
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
