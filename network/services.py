@@ -10,18 +10,34 @@ Fare formula (spec-compliant):
 """
 from collections import deque
 from django.conf import settings
+from django.core.cache import cache
 from network.models import Node, Edge
+
+_GRAPH_CACHE_KEY = 'carpool_graph'
+_GRAPH_CACHE_TTL = 60  # seconds
 
 
 # ---------------------------------------------------------------------------
 # Graph construction
 # ---------------------------------------------------------------------------
 
-def build_graph():
-    """Return adjacency list {node_id: [neighbour_id, ...]}."""
+def build_graph(use_cache=True):
+    """Return adjacency list {node_id: [neighbour_id, ...]}.
+
+    Results are cached for 60 s to avoid repeated DB hits on every dashboard
+    load. Pass use_cache=False when nodes/edges have just been mutated.
+    """
+    if use_cache:
+        cached = cache.get(_GRAPH_CACHE_KEY)
+        if cached is not None:
+            return cached
+
     graph = {n.id: [] for n in Node.objects.all()}
     for edge in Edge.objects.select_related('from_node', 'to_node'):
         graph.setdefault(edge.from_node.id, []).append(edge.to_node.id)
+
+    if use_cache:
+        cache.set(_GRAPH_CACHE_KEY, graph, _GRAPH_CACHE_TTL)
     return graph
 
 
@@ -105,10 +121,12 @@ def is_within_proximity(node_id, route_node_ids, max_dist=None, graph=None):
 # Detour calculation
 # ---------------------------------------------------------------------------
 
-def calculate_detour(remaining_route, pickup_id, dropoff_id):
+def calculate_detour(remaining_route, pickup_id, dropoff_id, graph=None):
     """
     Find optimal insertion of (pickup, dropoff) into the driver's remaining
     route (list of node IDs, last element = driver's destination).
+
+    Accepts an optional pre-built graph to avoid repeated DB calls.
 
     Returns dict or None:
         {
@@ -121,7 +139,8 @@ def calculate_detour(remaining_route, pickup_id, dropoff_id):
     if not remaining_route:
         return None
 
-    graph = build_graph()
+    if graph is None:
+        graph = build_graph()
     base_hops = len(remaining_route) - 1
     end_id = remaining_route[-1]
 
